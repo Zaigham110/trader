@@ -459,7 +459,9 @@ memory, and no validated gold edge to inherit.
 
 ## 7. Consolidated design defaults proposed for Phase 2
 
-Each becomes a `D-nnn` entry in `DECISIONS.md` once the owner reviews this file.
+Written before the owner's answers of 2026-11-04. Items 2, 3, 5 and 6 were changed by the owner
+(single Windows PC, Standard account, Anthropic API as main brain, no GPU); see D-016 to D-025 in
+`DECISIONS.md`. The rest were accepted.
 
 1. Python core; port the TypeScript risk/config/backtest patterns with their tests (D-004).
 2. Windows host (VPS in Amsterdam or owner PC) runs MT5 and a thin polling execution gateway; Linux

@@ -1,6 +1,6 @@
 # Project Brief — AI Gold Trader (XAUUSD on Exness via MetaTrader 5)
 
-Status: Phase 1 (Research) complete and awaiting owner approval. Phase 2 does not start until approved.
+Status: Phase 1 approved 2026-11-04 (D-023). Phase 2 documents drafted the same day and awaiting owner review. Owner answers to Q1–Q8 are recorded as D-016 to D-023; the defaults below are superseded where those decisions differ.
 Last updated: 2026-11-04
 
 This file records the shared understanding of the project, the questions that block
