@@ -1,0 +1,16 @@
+# secrets and local state
+.env
+.env.*
+!.env.example
+secrets/
+*.key
+*.pem
+# python
+__pycache__/
+*.pyc
+.venv/
+# data and reports (large, regenerated)
+data/
+reports/
+# os
+.DS_Store
