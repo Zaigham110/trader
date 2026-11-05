@@ -56,7 +56,7 @@ Design rules carried from the research and the old platform:
 | `execution` | The only order placer. `enter()` runs `check_entry`, then `order_check`, then `order_send` with SL/TP attached; `move_stop()`, `close()`, `close_all()`, `ensure_stop()`. Deterministic `magic` number and comment carry the bundle id. Throttle: ≤ 1 request/s sustained, back off on 10024. | yes |
 | `reconciler` | Every 60 s and at start: positions vs journal, stops present, pending orders, deals since last cursor; repairs or closes; raises alerts. | yes |
 | `journal` | Writes `orders`, `fills`, `positions`, `trades` (closed round-trips with costs), `market_snapshots`. | yes |
-| `api` | Localhost HTTP (FastAPI) with a shared token: `POST /intents` (from brain: enter/exit/move_stop/pause/kill), `GET /state`. Rejects anything not matching the schema. | yes |
+| `api` | Localhost HTTP (standard library, loopback only) with a shared token: `POST /intents` (from brain: enter/exit/move_stop/pause/kill), `GET /state`. Rejects anything not matching the schema. | yes |
 | `health` | Heartbeat row every 10 s; checks terminal connected, trade allowed, tick freshness, ping. | yes |
 
 ### 2.2 brain (Python, Windows)
@@ -179,7 +179,18 @@ loop can write to the risk section of config.
   tokens expire after 2 minutes.
 - Untrusted text (news) is wrapped in delimiters and stripped of markup before any prompt (R-024).
 
-## 7. Reuse map from the old platform
+## 7. Implementation status (Phase 4, 2026-11-05)
+
+Built and tested on Linux against `FakeMT5` and `FakeProvider`: `goldtrader.risk` (pure engine,
+property test), `goldtrader.execution` (engine, reconciler, journal, intent handler, throttle),
+`goldtrader.gateway` (live market, state builder, loopback API, service loop with the §5 safety
+rules), `goldtrader.llm` (provider protocol, fake provider, runtime loop, breaker, budget, prompt
+registry, cost ledger), `goldtrader.notify` (redaction, Telegram sender, alerts outbox,
+confirmations), `goldtrader.process` (locks, supervisor, exit log), `goldtrader.secrets`, and the
+`goldctl gateway` command. The Anthropic adapter and the chat bot are Phase 5 (D-031). Everything
+that needs the real terminal remains to be verified on the owner's PC (KU-001 family, KU-023).
+
+## 8. Reuse map from the old platform
 
 Patterns ported with tests: agent runtime loop, risk-engine ordering and property test, config
 schema + ceilings + watcher + hash, version tagging, reconcile loop, approval state machine,

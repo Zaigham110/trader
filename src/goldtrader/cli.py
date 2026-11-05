@@ -314,6 +314,71 @@ def sweep_cmd(
     typer.echo(f"{len(sw.runs)} runs recorded in {db}; ledger size {repo.trial_count()}")
 
 
+@app.command("gateway")
+def gateway(
+    config: Path = typer.Option(Path("config/demo.yaml")),
+    db: Path = typer.Option(Path("state/demo.sqlite")),
+    fake: bool = typer.Option(False, "--fake/--real"),
+    port: int = 8750,
+    minutes: float | None = None,
+) -> None:
+    """Run the gateway process: MT5 polling, risk, execution, reconciliation, loopback API."""
+    import logging
+    import threading
+
+    from goldtrader.gateway.service import GatewayService
+    from goldtrader.notify.redact import install as install_redaction
+    from goldtrader.process.exitlog import ExitLog
+    from goldtrader.process.lock import acquire
+    from goldtrader.secrets import all_secret_values, get_secret
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    install_redaction(logging.getLogger(), all_secret_values())
+    cfg = _load(config)
+    state_dir = Path(cfg.data.db_dir)
+    ExitLog(state_dir / "gateway.exit.log").install("gateway")
+    with acquire("gateway", state_dir):
+        conn = connect(db)
+        migrate(conn)
+        repo = Repo(conn)
+        client = _client(fake)
+        token = get_secret("GATEWAY_TOKEN", required=False)
+        svc = GatewayService(client, cfg, repo, token=token, port=port)
+        svc.start()
+        repo.heartbeat("gateway", "started", {"port": svc.api.port if svc.api else None})
+        typer.echo(
+            f"gateway up: symbol={svc.symbol} port={svc.api.port if svc.api else None} "
+            f"profile={cfg.owner.profile} mode={cfg.owner.mode}"
+        )
+        if token is None:
+            typer.echo(
+                "GATEWAY_TOKEN not set: a random token was generated; the brain must read it "
+                "from state/gateway.token",
+                err=True,
+            )
+            (state_dir / "gateway.token").write_text(svc.token)
+        stop = threading.Event()
+        if minutes:
+            threading.Timer(minutes * 60, stop.set).start()
+        try:
+            svc.run(stop)
+        finally:
+            svc.stop()
+
+
+@app.command("secret-set")
+def secret_set(name: str) -> None:
+    """Store a secret in the OS credential store (prompts; the value is never echoed)."""
+    from goldtrader.secrets import KNOWN, set_secret
+
+    if name not in KNOWN:
+        typer.echo(f"unknown secret name; choose one of {KNOWN}", err=True)
+        raise typer.Exit(code=1)
+    value = typer.prompt(f"value for {name}", hide_input=True)
+    where = set_secret(name, value)
+    typer.echo(f"{name} stored in {where}")
+
+
 @app.command("mt5-tests")
 def mt5_tests(
     fake: bool = typer.Option(True, "--fake/--real"),

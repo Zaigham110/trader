@@ -57,3 +57,13 @@ def test_mt5_tests_and_spec_dump_fake(tmp_path: Path):
     r = runner.invoke(app, ["spec-dump", "--fake", "--db", str(tmp_path / "s.sqlite")])
     assert r.exit_code == 0, r.output
     assert "trade_contract_size" in r.output
+
+
+def test_gateway_command_runs_briefly_with_fake(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("GOLDTRADER_GATEWAY_TOKEN", "x" * 32)
+    cfg = tmp_path / "cfg.yaml"
+    cfg.write_text(f"data:\n  db_dir: {tmp_path / 'state'}\nsession:\n  dst_mode: winter\n")
+    r = runner.invoke(app, ["gateway", "--fake", "--config", str(cfg), "--db", str(tmp_path / "g.sqlite"),
+                            "--port", "0", "--minutes", "0.02"])
+    assert r.exit_code == 0, r.output
+    assert "gateway up: symbol=XAUUSDm" in r.output
