@@ -343,7 +343,10 @@ def gateway(
         repo = Repo(conn)
         client = _client(fake)
         token = get_secret("GATEWAY_TOKEN", required=False)
-        svc = GatewayService(client, cfg, repo, token=token, port=port)
+        from goldtrader.feeds.calendar_store import CalendarStore
+
+        events_fn = CalendarStore(conn).events_fn(lambda: int(__import__("time").time() * 1000))
+        svc = GatewayService(client, cfg, repo, token=token, port=port, events_fn=events_fn)
         svc.start()
         repo.heartbeat("gateway", "started", {"port": svc.api.port if svc.api else None})
         typer.echo(
@@ -500,6 +503,55 @@ def status(
     ).fetchone()
     lines.append(f"trades today: {row[0]}  net P&L today: {row[1]:+.2f} USD (net of all costs)")
     typer.echo("\n".join(lines))
+
+
+@app.command("llm-check")
+def llm_check(config: Path = typer.Option(Path("config/demo.yaml"))) -> None:
+    """Verify Anthropic connectivity and the configured model ids (needs ANTHROPIC_API_KEY)."""
+    from goldtrader.llm.anthropic_provider import AnthropicProvider
+
+    cfg = _load(config)
+    p = AnthropicProvider(cfg.llm)
+    for tier in cfg.llm.tiers:
+        try:
+            typer.echo(f"{tier:<9} {p.ping(tier)} ok")
+        except Exception as e:  # noqa: BLE001
+            typer.echo(f"{tier:<9} {cfg.llm.tiers[tier].model} FAILED: {e}", err=True)
+            raise typer.Exit(code=1) from e
+
+
+@app.command("eval")
+def eval_cmd(
+    set_name: str = typer.Argument(..., help="headlines | regimes | reviews"),
+    config: Path = typer.Option(Path("config/demo.yaml")),
+    provider: str = typer.Option("fake", help="fake | anthropic"),
+    out: Path = typer.Option(Path("reports/evals")),
+    limit: int | None = None,
+    baseline: Path | None = typer.Option(None, help="previous summary JSON to gate against"),
+) -> None:
+    """Run one evaluation set and optionally gate it against a baseline summary (LOCAL_LLM §7)."""
+    from goldtrader.evals.cli import gate as eval_gate
+    from goldtrader.evals.cli import run_set
+    from goldtrader.llm.fake import FakeProvider
+    from goldtrader.llm.store import LLMStore
+
+    cfg = _load(config)
+    if provider == "anthropic":
+        from goldtrader.llm.anthropic_provider import AnthropicProvider
+
+        model = AnthropicProvider(cfg.llm)
+    else:
+        model = FakeProvider()
+    conn = connect(None)
+    migrate(conn)
+    summary, path = run_set(set_name, model, cfg, LLMStore(conn), out, limit)
+    typer.echo(json.dumps(summary.model_dump(mode="json"), indent=2, default=str)[:4000])
+    typer.echo(f"summary: {path}")
+    if baseline is not None:
+        decision = eval_gate(baseline, path)
+        typer.echo(f"gate: {'PASS' if decision.ok else 'FAIL'} {decision.reasons}")
+        if not decision.ok:
+            raise typer.Exit(code=1)
 
 
 @app.command("secret-set")

@@ -104,3 +104,13 @@ Config `providers.local.endpoint` pointing at an OpenAI-compatible server with J
 enforcement (llama.cpp, Ollama with raised context, vLLM). Recommended models and caveats are in
 `research/03_local_llm.md` (Qwen3.5-9B for fast, Qwen3.8-27B for standard; flat schemas; thinking off
 for extraction; Ollama context default must be raised). The same eval sets gate the switch.
+
+## 9. Implementation status (2026-11-05)
+
+`goldtrader.llm.anthropic_provider.AnthropicProvider` implements §1 for the Anthropic API per D-037
+and D-041: model per tier from config, `output_config.format` with the bot's schema, strict tools,
+effort per tier, prompt caching on the system prompt and tool list, streaming for the deep tier,
+transient/fatal error mapping, refusal handling, optional server-side fallbacks (off). The runtime,
+breaker, budget, prompt registry and cost ledger from Phase 4 wrap it. `goldctl llm-check` pings
+each tier; `goldctl eval <set> --provider anthropic --baseline <json>` applies the §7 gate. The local
+provider of §8 is not implemented; the interface and fallback ladder are unchanged.

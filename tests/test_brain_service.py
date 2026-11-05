@@ -142,3 +142,109 @@ def test_brain_fails_flat_without_provider_and_when_gateway_down(tmp_path):
         assert "cycle" not in ran
     finally:
         pass
+
+
+def test_brain_news_calendar_and_chat_jobs(tmp_path):
+    """Feeds → Research bot → news_events; calendar → events; chat command answered by code."""
+    from goldtrader.chat.telegram_loop import FakeTelegramUpdates
+    from goldtrader.feeds.rss import FetchResult
+
+    cfg, repo, brain_repo, gw, gclient, client, clock = _stack(tmp_path)
+    try:
+        rss = (
+            '<?xml version="1.0"?><rss version="2.0"><channel><title>t</title>'
+            "<item><guid>g1</guid><title>Fed holds rates, signals patience</title>"
+            "<link>https://example.org/1</link><pubDate>Tue, 13 Jan 2026 08:30:00 GMT</pubDate>"
+            "<description>Statement text.</description></item></channel></rss>"
+        )
+        ics = (
+            "BEGIN:VCALENDAR\nBEGIN:VEVENT\nUID:cpi1\nDTSTART:20260114T133000Z\n"
+            "SUMMARY:Consumer Price Index\nEND:VEVENT\nEND:VCALENDAR\n"
+        )
+
+        def fake_fetch(url, **kw):
+            if url.endswith(".ics"):
+                return FetchResult(200, ics, None, None)
+            return FetchResult(200, rss, None, None)
+
+        provider = FakeProvider()
+        # the cycle job's Risk-advisor shares the "fast" tier queue and runs first in the tick
+        research_out = {
+            "events": [
+                {
+                    "item_id": "fed_press:g1",
+                    "relevance": "high",
+                    "event_type": "fed",
+                    "direction_for_gold": "neutral",
+                    "magnitude": "medium",
+                    "horizon": "hours",
+                    "confidence": 0.8,
+                    "summary": "Fed on hold.",
+                }
+            ],
+            "dropped": ["bls_latest:g1"],
+        }
+        provider.script("fast", [{"budget": 50, "reasons": ["test"]}] + [research_out] * 3)
+        provider.script(
+            "standard",
+            [
+                {
+                    "action": "wait",
+                    "confidence": 0.5,
+                    "thesis": "No setup: waiting for the trend to confirm.",
+                    "invalidation": "n/a while flat",
+                    "horizon_minutes": 60,
+                    "agrees_with_signal": True,
+                }
+            ]
+            * 3,
+        )
+        sender = FakeTelegramSender()
+        updates = FakeTelegramUpdates()
+        brain = BrainService(
+            cfg,
+            brain_repo,
+            gclient,
+            provider,
+            sender=sender,
+            owner_chat_id=7,
+            clock_ms=clock,
+            cycle_every_s=60,
+            chat_updates=updates,
+            feed_fetch=fake_fetch,
+        )
+        updates.push(
+            {
+                "update_id": 1,
+                "message": {
+                    "message_id": 1,
+                    "chat": {"id": 7},
+                    "from": {"id": 7},
+                    "text": "/status",
+                },
+            }
+        )
+        ran = brain.tick()
+        assert {"news", "calendar", "chat"} <= set(ran), ran
+        assert brain_repo.c.execute("SELECT COUNT(*) FROM news_items").fetchone()[0] >= 1
+        assert brain_repo.c.execute("SELECT COUNT(*) FROM news_events").fetchone()[0] >= 1
+        assert (
+            brain_repo.c.execute(
+                "SELECT COUNT(*) FROM news_items WHERE processed_ms IS NOT NULL"
+            ).fetchone()[0]
+            >= 1
+        )
+        assert (
+            brain_repo.c.execute(
+                "SELECT COUNT(*) FROM events WHERE title LIKE 'Consumer%'"
+            ).fetchone()[0]
+            == 1
+        )
+        assert sender.sent and "OPEN" in sender.sent[-1].text
+        # the gateway now sees the CPI event through the calendar store
+        from goldtrader.feeds.calendar_store import CalendarStore
+
+        evs = CalendarStore(repo.c).events_fn(clock)()
+        assert any("Consumer" in e.title for e in evs)
+    finally:
+        gw.stop()

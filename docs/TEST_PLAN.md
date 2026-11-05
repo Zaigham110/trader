@@ -63,6 +63,11 @@ of each parameter), DST-shift sensitivity (±1 h), bull/bear/range window breakd
   journal → Telegram, with correct costs and risk % shown.
 
 ### Phase 5 exit (LLM and chat)
+- Status 2026-11-05: delivered on Linux. The Anthropic adapter is tested against the SDK's own
+  wire format with a mock transport (structured outputs, strict tools, effort, caching, streaming,
+  error mapping) but has not made a live call: `goldctl llm-check` and `goldctl eval headlines
+  --provider anthropic` need the owner's key. The chat loop is tested with a fake Bot API transport.
+  Items below that read "baseline agreement and latency recorded" need those live runs.
 - Eval sets built; baseline agreement and latency recorded for Haiku/Sonnet/Opus; model tiering (D-025)
   confirmed or changed by the owner with the numbers.
 - Chat acceptance: 20 scripted questions with correct provenance; 5 change commands blocked without

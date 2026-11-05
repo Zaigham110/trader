@@ -1,6 +1,6 @@
 # goldtrader — AI gold (XAUUSD) trading system for Exness via MetaTrader 5
 
-Status: Phase 4 complete on Linux (bots and risk engine); Phase 5 (Anthropic provider, chat bot) next. Documentation is the source of
+Status: Phase 5 complete on Linux (Anthropic provider, feeds, Telegram chat, evals); Phase 6 (learning system) next. Documentation is the source of
 truth: start with `docs/00_PROJECT_BRIEF.md`, then `docs/README.md`.
 
 Nothing here trades live. Phase 8 (limited live) requires the criteria in `docs/TEST_PLAN.md` and
@@ -60,7 +60,9 @@ logon and restart on failure; `scripts/windows/backup-db.ps1` is the nightly bac
 | `goldctl sweep --grid "stop_atr=0.6,1.0;target_atr=1.0,1.5"` | Parameter sweep → trial ledger → gate with PBO on the best run |
 | `goldctl mt5-tests --fake` | The MT5-T00…T16 suite against the in-memory FakeMT5 |
 | `goldctl gateway --fake` / `--real` | Gateway process: MT5 polling, risk engine, execution, reconciliation, loopback API |
-| `goldctl brain --provider fake` | Brain process: scheduler, bots, decision cycle, trade review, Telegram alerts |
+| `goldctl brain --provider anthropic` | Brain process (needs ANTHROPIC_API_KEY; `--provider fake` for dry runs): scheduler, bots, decision cycle, trade review, Telegram alerts |
+| `goldctl llm-check` | Ping each configured Claude model tier |
+| `goldctl eval headlines --provider anthropic --baseline reports/evals/<prev>.json` | Run an evaluation set and gate it against a baseline |
 | `goldctl status` | Heartbeats, open incidents, kill switch, positions, last cycle, today's net P&L |
 | `goldctl secret-set MT5_PASSWORD` | Store a secret in the OS credential store (never in files) |
 

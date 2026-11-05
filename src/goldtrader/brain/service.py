@@ -16,6 +16,9 @@ from goldtrader.brain.features import DbFeatures
 from goldtrader.brain.scheduler import Job, Scheduler
 from goldtrader.config.schema import Config
 from goldtrader.db.repo import Repo
+from goldtrader.bots.common import BotContext
+from goldtrader.feeds.calendar_store import CalendarRefresher, CalendarStore
+from goldtrader.feeds.news import NewsFetcher, NewsStore, news_for_research
 from goldtrader.gateway.api import GatewayClient
 from goldtrader.llm.provider import ModelProvider
 from goldtrader.llm.store import LLMStore
@@ -37,6 +40,9 @@ class BrainService:
         owner_chat_id: int | None = None,
         clock_ms: Callable[[], int] | None = None,
         cycle_every_s: int = 300,
+        chat_updates=None,
+        config_path=None,
+        feed_fetch=None,
     ) -> None:
         self.cfg = cfg
         self.repo = repo
@@ -75,15 +81,64 @@ class BrainService:
                 owner_chat_id,
                 critical_kinds={"kill_switch", "stop_missing", "spec_critical_change"},
             )
+        # feeds (D-038): news -> Research bot; calendar -> events table read by the gateway
+        self.news_store = NewsStore(repo.c)
+        self.calendar_store = CalendarStore(repo.c)
+        fetch_kw = {"fetch": feed_fetch} if feed_fetch is not None else {}
+        self.news_fetcher = NewsFetcher(cfg.feeds, self.news_store, self.clock_ms, **fetch_kw)
+        self.calendar_refresher = CalendarRefresher(
+            cfg.feeds,
+            self.calendar_store,
+            self.clock_ms,
+            fix_times_london=tuple(cfg.session.fix_times_london),
+            **fetch_kw,
+        )
+        # chat (D-039): only with a sender, an updates transport and the owner chat id
+        self.chat = None
+        if (
+            sender is not None
+            and chat_updates is not None
+            and owner_chat_id is not None
+            and cfg.chat.enabled
+        ):
+            from goldtrader.chat.telegram_loop import ChatService
+
+            self.chat = ChatService(
+                cfg,
+                repo.c,
+                provider,
+                self.store,
+                gateway,
+                sender,
+                chat_updates,
+                owner_chat_id,
+                self.clock_ms,
+                features_fn=lambda: self.feats.features(self._last_state),
+                config_path=config_path,
+            )
         self.scheduler = Scheduler(clock=lambda: self.clock_ms() / 1000.0)
         self.scheduler.add(
             Job("cycle", self._cycle_job, every_seconds=cycle_every_s, only_when=self._gateway_open)
         )
+        self.scheduler.add(Job("news", self._news_job, every_seconds=cfg.feeds.poll_minutes * 60))
+        self.scheduler.add(
+            Job(
+                "calendar",
+                self._calendar_job,
+                every_seconds=cfg.feeds.calendar_refresh_hours * 3600,
+            )
+        )
         self.scheduler.add(Job("review", self._review_job, every_seconds=60))
         self.scheduler.add(Job("alerts", self._alerts_job, every_seconds=10))
         self.scheduler.add(Job("heartbeat", self._heartbeat_job, every_seconds=10))
+        if self.chat is not None:
+            self.scheduler.add(
+                Job("chat", self._chat_job, every_seconds=max(1, cfg.chat.poll_seconds))
+            )
         self.last_cycle = None
         self.reviewed: set[str] = set()
+        self.last_news: dict = {}
+        self.last_calendar: dict = {}
 
     # ------------------------------------------------------------------ jobs
     def _gateway_open(self) -> bool:
@@ -105,6 +160,56 @@ class BrainService:
                 continue
             self.reviewed.add(trade["trade_id"])
             self.cycle.review_closed_trade(trade)
+
+    def _news_job(self) -> None:
+        """Fetch feeds, then run the Research bot on unprocessed items and mark them processed."""
+        self.last_news = self.news_fetcher.run_once()
+        items = news_for_research(self.news_store, limit=20)
+        if not items:
+            return
+        now = self.clock_ms()
+        ctx = BotContext(
+            features=self.feats.features(self._last_state),
+            gateway_state=self._last_state,
+            signal_side=0,
+            now_ms=now,
+            cfg=self.cfg,
+            news_items=items,
+        )
+        self.registry.run("research", ctx)
+        self.news_store.mark_processed([i["item_id"] for i in items], now)
+
+    def _calendar_job(self) -> None:
+        self.last_calendar = self.calendar_refresher.run_once()
+
+    def _chat_job(self) -> None:
+        if self.chat is not None:
+            self.chat.poll_once(timeout_s=0)
+
+    def _news_job(self) -> None:
+        """Fetch feeds, run the Research bot on unprocessed items, mark them processed."""
+        self.last_news = self.news_fetcher.run_once()
+        items = news_for_research(self.news_store, limit=20)
+        if not items:
+            return
+        now = self.clock_ms()
+        ctx = BotContext(
+            features=self.feats.features(self._last_state),
+            gateway_state=self._last_state,
+            signal_side=0,
+            now_ms=now,
+            cfg=self.cfg,
+            news_items=items,
+        )
+        self.registry.run("research", ctx)
+        self.news_store.mark_processed([i["item_id"] for i in items], now)
+
+    def _calendar_job(self) -> None:
+        self.last_calendar = self.calendar_refresher.run_once()
+
+    def _chat_job(self) -> None:
+        if self.chat is not None:
+            self.chat.poll_once(timeout_s=0)
 
     def _alerts_job(self) -> None:
         if self.dispatcher is not None:
