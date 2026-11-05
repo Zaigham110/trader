@@ -105,6 +105,39 @@ class LLMConfig(Frozen):
     monthly_budget_usd: float = 60.0
 
 
+class FeedConfig(Frozen):
+    name: str
+    url: str
+    kind: Literal["rss", "atom", "auto"] = "auto"
+    enabled: bool = True
+
+
+class FeedsConfig(Frozen):
+    """News and calendar sources (D-038). Defaults are official publishers only."""
+
+    news: tuple[FeedConfig, ...] = (
+        FeedConfig(name="fed_press", url="https://www.federalreserve.gov/feeds/press_all.xml"),
+        FeedConfig(name="bls_latest", url="https://www.bls.gov/feed/bls_latest.rss"),
+    )
+    poll_minutes: int = 10
+    bls_ics_url: str = "https://www.bls.gov/schedule/news_release/bls.ics"
+    forexfactory_json_url: str | None = None  # owner enables after reading the terms (KU-013)
+    calendar_refresh_hours: int = 12
+    max_item_age_hours: int = 48
+
+
+class ChatConfig(Frozen):
+    """Telegram chat assistant (D-039)."""
+
+    enabled: bool = True
+    poll_seconds: int = 2
+    confirm_ttl_s: int = 120
+    history_turns: int = 12
+    tier: str = "standard"
+    deep_tier_on_request: bool = True
+    quiet_hours_utc: tuple[int, int] | None = None
+
+
 class RiskLimits(Frozen):
     risk_per_trade_pct: float = 0.5
     daily_loss_pct: float = 2.0
@@ -143,6 +176,8 @@ class Config(Frozen):
     data: DataConfig = DataConfig()
     strategies: tuple[StrategyConfig, ...] = ()
     llm: LLMConfig = LLMConfig()
+    feeds: FeedsConfig = FeedsConfig()
+    chat: ChatConfig = ChatConfig()
     owner: OwnerConfig = OwnerConfig()
 
     @model_validator(mode="after")
