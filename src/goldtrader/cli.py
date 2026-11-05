@@ -437,6 +437,71 @@ def brain(
         svc.run(stop)
 
 
+@app.command("status")
+def status(
+    db: Path = typer.Option(Path("state/demo.sqlite")), gateway_url: str = "http://127.0.0.1:8750"
+) -> None:
+    """Owner summary: heartbeats, open incidents, kill switch, positions, last cycle, today's P&L."""
+    from goldtrader.db.connect import now_ms
+    from goldtrader.gateway.api import GatewayClient
+    from goldtrader.secrets import get_secret
+
+    conn = connect(db)
+    migrate(conn)
+    now = now_ms()
+    lines = []
+    for r in conn.execute("SELECT process, last_ms, status FROM heartbeats ORDER BY process"):
+        age = (now - r["last_ms"]) / 1000
+        lines.append(
+            f"{r['process']:<8} {r['status']:<12} last heartbeat {age:,.0f}s ago"
+            + ("  <-- STALE" if age > 60 else "")
+        )
+    inc = conn.execute(
+        "SELECT kind, severity, opened_ms FROM incidents WHERE closed_ms IS NULL"
+    ).fetchall()
+    lines.append(
+        f"open incidents: {len(inc)}" + (" " + ", ".join(i["kind"] for i in inc) if inc else "")
+    )
+    token = get_secret("GATEWAY_TOKEN", required=False)
+    tok_file = Path("state/gateway.token")
+    if token is None and tok_file.exists():
+        token = tok_file.read_text().strip()
+    if token:
+        st = GatewayClient(gateway_url, token).state()
+        if st is None:
+            lines.append("gateway: unreachable")
+        else:
+            lines.append(
+                f"gateway: session={st.session} entries={'yes' if st.entries_allowed else 'no'} "
+                f"kill={'ON' if st.kill_switch else 'off'} paused={'yes' if st.paused else 'no'} "
+                f"equity={st.equity} day_pnl={st.day_pnl:+.2f} positions={st.open_positions}"
+            )
+            for p in st.positions:
+                lines.append(
+                    f"  {p['side']:<5} {p['volume']} @ {p['price_open']} sl={p['sl']} tp={p['tp']} "
+                    f"pnl={p['profit']:+.2f}"
+                )
+    else:
+        lines.append("gateway: no token available (set GATEWAY_TOKEN or start the gateway first)")
+    try:
+        cyc = conn.execute(
+            "SELECT status, gate_reason, started_ms FROM brain_cycles ORDER BY started_ms DESC LIMIT 1"
+        ).fetchone()
+        if cyc:
+            lines.append(
+                f"last cycle: {cyc['status']} ({cyc['gate_reason'] or '-'}) "
+                f"{(now - cyc['started_ms']) / 1000:,.0f}s ago"
+            )
+    except Exception:
+        pass
+    day_start = now - (now % 86_400_000)
+    row = conn.execute(
+        "SELECT COUNT(*), COALESCE(SUM(net_pnl),0) FROM trades WHERE exit_ms >= ?", (day_start,)
+    ).fetchone()
+    lines.append(f"trades today: {row[0]}  net P&L today: {row[1]:+.2f} USD (net of all costs)")
+    typer.echo("\n".join(lines))
+
+
 @app.command("secret-set")
 def secret_set(name: str) -> None:
     """Store a secret in the OS credential store (prompts; the value is never echoed)."""

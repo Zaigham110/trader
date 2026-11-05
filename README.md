@@ -42,6 +42,12 @@ $env:MT5_LOGIN="12345678"; $env:MT5_PASSWORD="..."; $env:MT5_SERVER="Exness-MT5T
 Paste the Markdown table into `docs/MT5_EXNESS_INTEGRATION.md` §8. The suite refuses to place
 orders on a real account unless `--allow-real` is passed.
 
+## Running on the PC
+
+`scripts/windows/install-tasks.ps1` registers two Scheduled Tasks (gateway, brain) that start at
+logon and restart on failure; `scripts/windows/backup-db.ps1` is the nightly backup;
+`goldctl status` prints heartbeats, incidents, kill-switch state, positions and today's P&L.
+
 ## Everyday commands (`goldctl`)
 
 | Command | Purpose |
@@ -55,6 +61,7 @@ orders on a real account unless `--allow-real` is passed.
 | `goldctl mt5-tests --fake` | The MT5-T00…T16 suite against the in-memory FakeMT5 |
 | `goldctl gateway --fake` / `--real` | Gateway process: MT5 polling, risk engine, execution, reconciliation, loopback API |
 | `goldctl brain --provider fake` | Brain process: scheduler, bots, decision cycle, trade review, Telegram alerts |
+| `goldctl status` | Heartbeats, open incidents, kill switch, positions, last cycle, today's net P&L |
 | `goldctl secret-set MT5_PASSWORD` | Store a secret in the OS credential store (never in files) |
 
 ## Layout

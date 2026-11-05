@@ -80,3 +80,12 @@ def test_gateway_command_runs_briefly_with_fake(tmp_path: Path, monkeypatch):
     )
     assert r.exit_code == 0, r.output
     assert "gateway up: symbol=XAUUSDm" in r.output
+
+
+def test_status_command_reads_db_without_gateway(tmp_path: Path, monkeypatch):
+    monkeypatch.delenv("GOLDTRADER_GATEWAY_TOKEN", raising=False)
+    monkeypatch.delenv("GATEWAY_TOKEN", raising=False)
+    monkeypatch.chdir(tmp_path)
+    r = runner.invoke(app, ["status", "--db", str(tmp_path / "s.sqlite")])
+    assert r.exit_code == 0, r.output
+    assert "open incidents: 0" in r.output and "trades today: 0" in r.output
