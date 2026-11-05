@@ -117,3 +117,13 @@ Counterfactuals (no-stop, different sizing) are reported only when n ≥ 200.
 
 Weekly hypotheses; monthly summary of the ledger to the owner; quarterly batch re-estimation of
 parameters through the pipeline; drift monitors decide when to trigger, never what to change.
+
+## 8. Implementation status (Phase 6, 2026-11-05)
+
+Owner-only gates live in `owner.learning` (D-045). Tables: `champions`, `experiments`,
+`experiment_events` (append-only), `shadow_trades`, `monitor_events`, `bundle_state`,
+`allocation_log` (migration 008). The decision cycle accepts a router that stamps each proposal with
+the champion or, during limited live, the challenger bundle by deterministic allocation (D-047). The
+weekly research job runs on Sundays; the learning job (intake → offline gate → stage advancement →
+monitors → rollback) is wired in the brain once the pipeline module lands. Numeric defaults are the
+§3 values and remain Assumptions until demo data exists.

@@ -95,7 +95,7 @@ def test_happy_enter_sends_intent_and_journals_everything():
     assert rb["advised"] == 80 and rb["budget"] == 80 and json.loads(rb["hard_rules_json"]) == []
     (cyc_row,) = _rows(conn, "brain_cycles")
     steps = [s["step"] for s in json.loads(cyc_row["steps_json"])]
-    assert steps == ["gateway_state", "context", "risk_advisor", "strategy", "gate", "intent"]
+    assert steps == ["gateway_state", "context", "risk_advisor", "strategy", "route", "gate", "intent"]
     assert cyc_row["status"] == "sent" and cyc_row["proposal_id"] == res.proposal_id
     assert len(_rows(conn, "agent_runs")) == 2
 

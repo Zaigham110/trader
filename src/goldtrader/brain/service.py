@@ -128,6 +128,14 @@ class BrainService:
                 every_seconds=cfg.feeds.calendar_refresh_hours * 3600,
             )
         )
+        self.scheduler.add(
+            Job(
+                "weekly_research",
+                self._weekly_research_job,
+                daily_at_utc="06:00",
+                only_when=self._is_sunday,
+            )
+        )
         self.scheduler.add(Job("review", self._review_job, every_seconds=60))
         self.scheduler.add(Job("alerts", self._alerts_job, every_seconds=10))
         self.scheduler.add(Job("heartbeat", self._heartbeat_job, every_seconds=10))
@@ -179,6 +187,23 @@ class BrainService:
         self.registry.run("research", ctx)
         self.news_store.mark_processed([i["item_id"] for i in items], now)
 
+    def _is_sunday(self) -> bool:
+        return datetime.fromtimestamp(self.clock_ms() / 1000, UTC).weekday() == 6
+
+    def _weekly_research_job(self) -> None:
+        """Weekly hypothesis generation (LEARNING_SYSTEM §3.1); intake happens in the learning job."""
+        now = self.clock_ms()
+        ctx = BotContext(
+            features=self.feats.features(self._last_state),
+            gateway_state=self._last_state,
+            signal_side=0,
+            now_ms=now,
+            cfg=self.cfg,
+            recent_trades=self._recent_trades(),
+            lessons=self.registry.lessons(10),
+        )
+        self.registry.run("weekly_research", ctx)
+
     def _calendar_job(self) -> None:
         self.last_calendar = self.calendar_refresher.run_once()
 
@@ -203,6 +228,23 @@ class BrainService:
         )
         self.registry.run("research", ctx)
         self.news_store.mark_processed([i["item_id"] for i in items], now)
+
+    def _is_sunday(self) -> bool:
+        return datetime.fromtimestamp(self.clock_ms() / 1000, UTC).weekday() == 6
+
+    def _weekly_research_job(self) -> None:
+        """Weekly hypothesis generation (LEARNING_SYSTEM §3.1); intake happens in the learning job."""
+        now = self.clock_ms()
+        ctx = BotContext(
+            features=self.feats.features(self._last_state),
+            gateway_state=self._last_state,
+            signal_side=0,
+            now_ms=now,
+            cfg=self.cfg,
+            recent_trades=self._recent_trades(),
+            lessons=self.registry.lessons(10),
+        )
+        self.registry.run("weekly_research", ctx)
 
     def _calendar_job(self) -> None:
         self.last_calendar = self.calendar_refresher.run_once()

@@ -60,6 +60,7 @@ class CycleResult:
     intent_result: IntentResult | None = None
     risk_budget: int | None = None
     cycle_id: str = ""
+    bundle_id: str | None = None
     steps: list[dict[str, Any]] = field(default_factory=list)
 
 
@@ -92,9 +93,13 @@ class DecisionCycle:
         signal_only_fallback: bool = False,
         calibration_fn: Callable[[], str] | None = None,
         event_fn: Callable[[], tuple[str, float] | None] | None = None,
+        router: Callable[[str], tuple[str, StrategyConfig]] | None = None,
     ) -> None:
         self.cfg = cfg
         self.strat = strat
+        # D-047: optional limited-live router: proposal_id -> (bundle_id, strategy variant).
+        # Without it every proposal is stamped with the strategy id and gated with its config.
+        self.router = router
         self.registry = registry
         self.gateway = gateway
         self.c = repo_conn
@@ -161,13 +166,26 @@ class DecisionCycle:
             return
         res.proposal_id = proposal_id
 
+        # Bundle routing (D-047): champion by default; a limited-live challenger by allocation
+        bundle_id, strat = self.strat.id, self.strat
+        if self.router is not None:
+            try:
+                bundle_id, strat = self.router(proposal_id)
+            except Exception as e:  # noqa: BLE001 - routing failure must not block the champion
+                self._step(res, "route", error=f"{type(e).__name__}: {e}")
+        res.bundle_id = bundle_id
+        self._step(res, "route", bundle_id=bundle_id, strategy=strat.id)
+        self.c.execute(
+            "UPDATE proposals SET bundle_id=? WHERE proposal_id=?", (bundle_id, proposal_id)
+        )
+
         # Code gates
         now = self.clock_ms()
         gi = GateInput(
             proposal=proposal,
             proposal_id=proposal_id,
             proposal_age_s=max(0.0, (now - ctx.now_ms) / 1000.0),
-            bundle_id=self.strat.id,
+            bundle_id=bundle_id,
             signal_side=ctx.signal_side,
             features=ctx.features,
             session=_session(state),
@@ -178,7 +196,7 @@ class DecisionCycle:
             ask=state.ask if state.ask is not None else 0.0,
             now_ms=now,
         )
-        outcome = gate_entry(gi, self.cfg, self.strat)
+        outcome = gate_entry(gi, self.cfg, strat)
         res.gate_reason = outcome.reason
         self._step(res, "gate", ok=outcome.ok, reason=outcome.reason)
         if not outcome.ok or outcome.intent is None:
