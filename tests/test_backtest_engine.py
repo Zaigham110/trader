@@ -139,17 +139,17 @@ def _hand_frame(rows):
     """rows: list of (bid_open, bid_high, bid_low, bid_close); ask = bid + 0.20."""
     t0 = int(datetime(2026, 1, 13, 10, 0, tzinfo=UTC).timestamp())
     recs = []
-    for i, (o, h, l, c) in enumerate(rows):
+    for i, (o, h, lo, c) in enumerate(rows):
         recs.append(
             {
                 "time": t0 + 60 * i,
                 "bid_open": o,
                 "bid_high": h,
-                "bid_low": l,
+                "bid_low": lo,
                 "bid_close": c,
                 "ask_open": o + 0.2,
                 "ask_high": h + 0.2,
-                "ask_low": l + 0.2,
+                "ask_low": lo + 0.2,
                 "ask_close": c + 0.2,
                 "ticks": 10,
                 "atr": 10.0,

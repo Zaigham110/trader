@@ -7,13 +7,13 @@ straight copy and FakeMT5 produces identical shapes (docs/research/02_exness_mt5
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 from typing import Literal
 
 Side = Literal["long", "short"]
 
 
-class SessionState(str, Enum):
+class SessionState(StrEnum):
     OPEN = "OPEN"  # trading allowed, no restriction
     PRE_BREAK_BUFFER = "PRE_BREAK_BUFFER"  # inside the pre-break buffer: flatten, no entries
     CLOSE_ONLY = "CLOSE_ONLY"  # broker allows closes only

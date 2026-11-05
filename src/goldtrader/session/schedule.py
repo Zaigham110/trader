@@ -28,7 +28,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
-from enum import Enum
+from enum import StrEnum
 from typing import Literal
 
 from goldtrader.config.schema import HoursConfig
@@ -45,7 +45,7 @@ MAINTENANCE_END_WINTER = "09:00:00"
 SUNDAY_CLOSE_ONLY_START_WINTER = "23:01:30"
 
 
-class ScheduleState(str, Enum):
+class ScheduleState(StrEnum):
     """What the published schedule says about XAUUSD at an instant."""
 
     OPEN = "OPEN"

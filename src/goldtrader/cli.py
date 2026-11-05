@@ -60,7 +60,7 @@ def _load(config: Path) -> Config:
         return load_config(config)
     except ConfigError as e:
         typer.echo(f"config error: {e}", err=True)
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=1) from e
 
 
 def _default_spec(symbol: str) -> SymbolSpec:
