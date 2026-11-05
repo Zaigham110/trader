@@ -30,8 +30,11 @@ recorded default the owner has not overridden (marked "Default").
 | D-022 | 2026-11-04 | Accepted (owner) | Historical data: Exness Personal Area tick history and MT5 terminal history only. |
 | D-023 | 2026-11-04 | Accepted (owner) | Phase 1 approved; Phase 2 (documentation and architecture) started 2026-11-04. |
 | D-024 | 2026-11-04 | Default | Database: SQLite (WAL mode) with sqlite-vec for embeddings, one file per environment (demo/live). Chosen over Postgres because the system runs on one PC with one writer per table family and no Docker dependency. |
-| D-025 | 2026-11-04 | Proposed | Model tiering on Anthropic: Haiku 5.5 for high-frequency extraction and classification, Sonnet 5.5 for analysis, post-trade review and chat, Opus 5.5 for the weekly strategy-research job. Anthropic's own guidance defaults to Opus 5.5 everywhere; the tiering is a cost choice that needs owner confirmation (estimated 20–60 USD/month vs ~330 USD/month all-Opus). |
+| D-025 | 2026-11-04 | Accepted (owner, 2026-11-04) | Model tiering on Anthropic: Haiku 5.5 for high-frequency extraction and classification, Sonnet 5.5 for analysis, post-trade review and chat, Opus 5.5 for the weekly strategy-research job. Anthropic's own guidance defaults to Opus 5.5 everywhere; the tiering is a cost choice that needs owner confirmation (estimated 20–60 USD/month vs ~330 USD/month all-Opus). |
 | D-026 | 2026-11-04 | Default | Process topology on the PC: two supervised Python processes. `gateway` (MT5 I/O, risk engine, execution, reconciliation) and `brain` (bots, LLM calls, learning, Telegram). They share the SQLite database; order intents go to the gateway over a localhost HTTP API with a shared token. |
+| D-027 | 2026-11-04 | Accepted (owner) | Phase 2 documents approved; Phase 3 (data pipeline, MT5 integration, backtesting) started 2026-11-04. |
+| D-028 | 2026-11-04 | Default | Phase 3 is developed on Linux against a `FakeMT5` double that reproduces the documented MT5 return codes and data shapes; the real `MetaTrader5` adapter is a thin module that imports the package only on Windows. The 16 on-account tests ship as a runnable command (`goldctl mt5-tests`) for the owner's PC and their results are pasted back into `MT5_EXNESS_INTEGRATION.md`. |
+| D-029 | 2026-11-04 | Default | Toolchain: Python 3.12+ (3.13 used in development), `uv` for environments, `pytest` + `hypothesis` for tests, `pydantic` v2 for schemas, `numpy`/`pandas` for data, SQLite via the standard library. No ORM. |
 
 
 ## D-001 — Standalone product

@@ -108,7 +108,12 @@ the documented upgrade path if uptime is a problem.
 
 ## 8. Phase 3 acceptance checklist (the 16 on-account tests)
 
-Copied from `research/02_exness_mt5.md` §(a) and tracked as `MT5-T01` to `MT5-T16`: connectivity and
+Implemented in `src/goldtrader/mt5/onaccount.py` and run with `goldctl mt5-tests` (D-028). On Linux the
+suite runs against `FakeMT5` in CI; on the owner's Windows PC it runs against the real terminal and
+refuses order-placing tests on a real account unless `--allow-real` is given. Paste the rendered
+Markdown table below this paragraph when the demo run is done (KU-001, KU-012, KU-019, KU-022).
+
+Copied from `research/02_exness_mt5.md` §(a) and tracked as `MT5-T00` to `MT5-T16`: connectivity and
 identity; symbol discovery; contract spec dump; filling-mode probe; margin pre-check incl. HMR; stops
 rule probe; partial close; hedge + close-by; pending limit and `[SL violated]`; slippage logging (20
 demo + 20 live 0.01-lot orders); swap booking (informational, intraday system); commission booking (expect

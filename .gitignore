@@ -14,3 +14,11 @@ data/
 reports/
 # os
 .DS_Store
+.venv/
+state/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+.pytest_cache/
+.ruff_cache/
+*.egg-info/

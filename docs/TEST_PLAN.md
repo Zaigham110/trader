@@ -41,6 +41,9 @@ of each parameter), DST-shift sensitivity (±1 h), bull/bear/range window breakd
 ## 4. Phase gates
 
 ### Phase 3 exit (data, MT5, backtesting)
+- Code delivered on Linux against `FakeMT5` (D-028): config, types, MT5 layer, session clock,
+  data pipeline, backtest engine, validation statistics, offline gate, trial ledger, CLI, with the
+  full pytest suite green. Items below that need the terminal run on the owner's PC.
 - The 16 on-account tests `MT5-T01..T16` pass on demo and are recorded in `MT5_EXNESS_INTEGRATION.md`.
 - 7-day data soak: ≥ 99.5% of expected 1 s samples in OPEN sessions; 1 m bars match `copy_rates` M1
   within tolerance; session state transitions match the published schedule.

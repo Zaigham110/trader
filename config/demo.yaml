@@ -1,0 +1,26 @@
+# Demo profile with a realistic balance (5,000 USD demo account). Normal risk limits.
+version: 1
+account:
+  symbol: XAUUSDm
+  environment: demo
+  account_type: standard
+session:
+  dst_mode: auto
+  pre_break_buffer_min: 15
+strategies:
+  - id: trend_atr_v1
+    kind: trend_atr
+    enabled: true
+    mode: shadow
+    params: {ema_fast: 20, ema_slow: 50, atr_period: 14, stop_atr: 1.0, target_atr: 1.5}
+owner:
+  profile: normal
+  mode: demo
+  risk:
+    risk_per_trade_pct: 0.5
+    daily_loss_pct: 2.0
+    weekly_loss_pct: 4.0
+    max_drawdown_pct: 10.0
+    max_positions: 1
+    max_volume_lots: 0.01
+    max_spread_pips: 60

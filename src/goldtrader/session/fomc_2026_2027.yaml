@@ -1,0 +1,22 @@
+# FOMC meeting calendar used by goldtrader.session.calendar.load_fomc_dates (R-006).
+#
+# Source: https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm (accessed 2026-11-04,
+# docs/research/01_gold_trading.md §4.3). The policy statement is released at 14:00
+# America/New_York on the second (end) day of each two-day meeting; `sep: true` marks meetings
+# with a Summary of Economic Projections and a press conference.
+#
+# NOTE: 2027 dates are NOT yet entered. Add them from federalreserve.gov before 2027-01-01 and
+# re-verify the 2026 list if the Fed publishes a change. The system fails open on a missing
+# meeting (no NEWS_WINDOW), so keep this file current.
+timezone: America/New_York
+decision_time: "14:00"
+meetings:
+  - {start: 2026-01-27, end: 2026-01-28}
+  - {start: 2026-03-17, end: 2026-03-18, sep: true}
+  - {start: 2026-04-28, end: 2026-04-29}
+  - {start: 2026-06-16, end: 2026-06-17, sep: true}
+  - {start: 2026-07-28, end: 2026-07-29}
+  - {start: 2026-09-15, end: 2026-09-16, sep: true}
+  - {start: 2026-10-27, end: 2026-10-28}
+  - {start: 2026-12-08, end: 2026-12-09, sep: true}
+  # 2027: add from https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm
