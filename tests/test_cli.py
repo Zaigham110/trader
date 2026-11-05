@@ -11,7 +11,7 @@ def test_config_check_and_db_init(tmp_path: Path):
     r = runner.invoke(app, ["config-check", "config/demo.yaml"])
     assert r.exit_code == 0 and "config_hash" in r.output
     r = runner.invoke(app, ["db-init", "--db", str(tmp_path / "t.sqlite")])
-    assert r.exit_code == 0 and "schema version 1" in r.output
+    assert r.exit_code == 0 and "schema version" in r.output
 
 
 def test_synth_backtest_sweep_round_trip(tmp_path: Path):

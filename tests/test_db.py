@@ -37,8 +37,8 @@ def _spec(**over):
 
 def test_migrate_is_idempotent_and_versioned():
     conn = connect(None)
-    assert migrate(conn) == 1
-    assert migrate(conn) == 1
+    v = migrate(conn)
+    assert v >= 1 and migrate(conn) == v  # idempotent; later phases add migrations
     tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     assert {"bars", "trial_ledger", "symbol_specs", "trades", "bundles"} <= tables
 
