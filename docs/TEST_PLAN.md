@@ -75,6 +75,10 @@ of each parameter), DST-shift sensitivity (±1 h), bull/bear/range window breakd
 - Budget breach drill: AI calls stop, safety continues.
 
 ### Phase 6 exit (learning)
+- Status 2026-11-05: delivered on Linux. Tests drive a hypothesis through intake → offline gate →
+  demo → shadow → limited live → promotion and a forced rollback on seeded data; the immutable-layer
+  tests prove the learning package has no write path to the owner section. A real pass on demo data
+  (S-6 with the live trial ledger) happens during Phase 7.
 - One hypothesis travels the whole pipeline on demo with ledger rows, gate results, stage transitions
   and a forced rollback demonstrated (S-6).
 - Attempted write to the owner section by the learning module fails in a test.
