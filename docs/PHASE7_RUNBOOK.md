@@ -5,7 +5,13 @@ report and the owner's decision on Phase 8. Nothing in this phase trades real mo
 
 ## 0. What you need
 
-- Windows PC that stays on during gold hours (Sunday 23:05 to Friday 21:58 UTC), MT5 installed from
+Mac users (D-053): every command below runs **on the Windows machine**, not on the Mac. Install
+Microsoft Remote Desktop from the Mac App Store, connect to the Windows machine, and work in a
+PowerShell window there. Telegram works from your phone or Mac as usual. To send me files, copy
+them from the Windows machine (Remote Desktop folder redirection, or commit `reports/` to a branch
+of this repository with `git add reports && git commit && git push`; `state/` is git-ignored).
+
+- Windows machine (PC or VPS) that stays on during gold hours (Sunday 23:05 to Friday 21:58 UTC), MT5 installed from
   Exness and logged into the **demo** account once, *Allow algorithmic trading* enabled.
 - Your Anthropic API key, a Telegram bot token (from @BotFather) and your Telegram chat id.
 - Git, `uv` (https://docs.astral.sh/uv/) and this repository cloned.
