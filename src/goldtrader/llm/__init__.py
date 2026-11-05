@@ -1,6 +1,7 @@
 """LLM layer (R-021..R-025, D-031): provider interface, fake provider, schema tools, prompt registry,
 agent runtime, circuit breaker, budget and the SQLite ledger. Bots import from here only."""
 
+from goldtrader.llm.anthropic_provider import AnthropicProvider  # noqa: F401
 from goldtrader.llm.breaker import BreakerEvent, CircuitBreaker  # noqa: F401
 from goldtrader.llm.budget import Budget  # noqa: F401
 from goldtrader.llm.fake import HANG, MAX_TOKENS, REFUSE, FakeProvider  # noqa: F401
