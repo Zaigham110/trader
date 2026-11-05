@@ -16,6 +16,9 @@ of this repository with `git add reports && git commit && git push`; `state/` is
 - Your Anthropic API key, a Telegram bot token (from @BotFather) and your Telegram chat id.
 - Git, `uv` (https://docs.astral.sh/uv/) and this repository cloned.
 
+The complete, step-by-step Windows installation is in `WINDOWS_SETUP.md`; the sections below
+summarise the same commands.
+
 ## 1. Install (once)
 
 ```powershell

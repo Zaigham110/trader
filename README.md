@@ -14,7 +14,9 @@ uv pip install -e ".[dev]"
 .venv/bin/pytest -q
 ```
 
-## Install on the owner's Windows PC (MT5 terminal required)
+## Install on the owner's Windows machine (MT5 terminal required)
+
+The complete ordered guide is `docs/WINDOWS_SETUP.md`. Short version:
 
 1. Install MetaTrader 5 from Exness, log in to the **demo** account once, and enable
    *Tools → Options → Expert Advisors → Allow algorithmic trading*.
