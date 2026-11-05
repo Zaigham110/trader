@@ -16,6 +16,7 @@ Times: the package takes and returns UTC (`copy_*` "in UTC time zone (without th
 every datetime passed in is converted to an aware UTC datetime first; naive datetimes are assumed
 to be UTC. Passwords are never logged or stored.
 """
+
 from __future__ import annotations
 
 import logging
@@ -58,13 +59,17 @@ def _asdict(obj: Any) -> dict:
         return obj
     if hasattr(obj, "_asdict"):
         return obj._asdict()
-    return {k: getattr(obj, k) for k in dir(obj) if not k.startswith("_")
-            and not callable(getattr(obj, k))}
+    return {
+        k: getattr(obj, k)
+        for k in dir(obj)
+        if not k.startswith("_") and not callable(getattr(obj, k))
+    }
 
 
 def _defaults(cls: type) -> set[str]:
-    return {f.name for f in fields(cls)
-            if f.default is not MISSING or f.default_factory is not MISSING}
+    return {
+        f.name for f in fields(cls) if f.default is not MISSING or f.default_factory is not MISSING
+    }
 
 
 def _build(cls: type, row: dict, **overrides: Any):
@@ -82,15 +87,31 @@ def bar_from_rate(rate: Any, point: float, seconds: int) -> Bar:
     get = rate.__getitem__ if not hasattr(rate, "_asdict") else rate._asdict().__getitem__
     o, h, lo, c = float(get("open")), float(get("high")), float(get("low")), float(get("close"))
     spread = float(get("spread")) * point
-    return Bar(time=int(get("time")), seconds=seconds, bid_open=o, bid_high=h, bid_low=lo,
-               bid_close=c, ask_open=o + spread, ask_high=h + spread, ask_low=lo + spread,
-               ask_close=c + spread, ticks=int(get("tick_volume")))
+    return Bar(
+        time=int(get("time")),
+        seconds=seconds,
+        bid_open=o,
+        bid_high=h,
+        bid_low=lo,
+        bid_close=c,
+        ask_open=o + spread,
+        ask_high=h + spread,
+        ask_low=lo + spread,
+        ask_close=c + spread,
+        ticks=int(get("tick_volume")),
+    )
 
 
 def tick_from_row(row: Any) -> Tick:
     get = row.__getitem__ if not hasattr(row, "_asdict") else row._asdict().__getitem__
-    return Tick(time_msc=int(get("time_msc")), bid=float(get("bid")), ask=float(get("ask")),
-                last=float(get("last")), volume=int(get("volume")), flags=int(get("flags")))
+    return Tick(
+        time_msc=int(get("time_msc")),
+        bid=float(get("bid")),
+        ask=float(get("ask")),
+        last=float(get("last")),
+        volume=int(get("volume")),
+        flags=int(get("flags")),
+    )
 
 
 class RealMT5:
@@ -105,8 +126,9 @@ class RealMT5:
         self._point_cache: dict[str, float] = {}
 
     # ------------------------------------------------------------------ connection
-    def initialize(self, path=None, login=None, password=None, server=None, timeout=60000,
-                   portable=False) -> bool:
+    def initialize(
+        self, path=None, login=None, password=None, server=None, timeout=60000, portable=False
+    ) -> bool:
         kwargs: dict[str, Any] = {"timeout": timeout, "portable": portable}
         if login is not None:
             kwargs.update(login=int(login), password=password, server=server)
@@ -165,13 +187,15 @@ class RealMT5:
             raise MT5Error(f"symbol_info({symbol!r}) failed: {self.last_error()}")
         return self._point_cache[symbol]
 
-    def copy_rates_from(self, symbol: str, timeframe: int, date_from: datetime, count: int
-                        ) -> list[Bar] | None:
+    def copy_rates_from(
+        self, symbol: str, timeframe: int, date_from: datetime, count: int
+    ) -> list[Bar] | None:
         rates = self._mt5.copy_rates_from(symbol, timeframe, to_utc(date_from), int(count))
         return self._bars(symbol, timeframe, rates)
 
-    def copy_rates_range(self, symbol: str, timeframe: int, date_from: datetime, date_to: datetime
-                         ) -> list[Bar] | None:
+    def copy_rates_range(
+        self, symbol: str, timeframe: int, date_from: datetime, date_to: datetime
+    ) -> list[Bar] | None:
         rates = self._mt5.copy_rates_range(symbol, timeframe, to_utc(date_from), to_utc(date_to))
         return self._bars(symbol, timeframe, rates)
 
@@ -182,19 +206,22 @@ class RealMT5:
         seconds = timeframe_seconds(timeframe)
         return [bar_from_rate(r, point, seconds) for r in rates]
 
-    def copy_ticks_range(self, symbol: str, date_from: datetime, date_to: datetime, flags: int
-                         ) -> list[Tick] | None:
+    def copy_ticks_range(
+        self, symbol: str, date_from: datetime, date_to: datetime, flags: int
+    ) -> list[Tick] | None:
         raw = self._mt5.copy_ticks_range(symbol, to_utc(date_from), to_utc(date_to), int(flags))
         return None if raw is None else [tick_from_row(t) for t in raw]
 
-    def copy_ticks_from(self, symbol: str, date_from: datetime, count: int, flags: int
-                        ) -> list[Tick] | None:
+    def copy_ticks_from(
+        self, symbol: str, date_from: datetime, count: int, flags: int
+    ) -> list[Tick] | None:
         raw = self._mt5.copy_ticks_from(symbol, to_utc(date_from), int(count), int(flags))
         return None if raw is None else [tick_from_row(t) for t in raw]
 
     # ------------------------------------------------------------------ trading
-    def order_calc_margin(self, action: int, symbol: str, volume: float, price: float
-                          ) -> float | None:
+    def order_calc_margin(
+        self, action: int, symbol: str, volume: float, price: float
+    ) -> float | None:
         m = self._mt5.order_calc_margin(int(action), symbol, float(volume), float(price))
         return None if m is None else float(m)
 
@@ -207,8 +234,7 @@ class RealMT5:
         raw = self._mt5.order_send(request.to_mt5())
         return None if raw is None else _build(OrderResult, _asdict(raw))
 
-    def positions_get(self, symbol: str | None = None, ticket: int | None = None
-                      ) -> list[Position]:
+    def positions_get(self, symbol: str | None = None, ticket: int | None = None) -> list[Position]:
         if ticket is not None:
             raw = self._mt5.positions_get(ticket=int(ticket))
         elif symbol is not None:
@@ -221,8 +247,9 @@ class RealMT5:
         raw = self._mt5.orders_get(symbol=symbol) if symbol else self._mt5.orders_get()
         return [_build(PendingOrder, _asdict(o)) for o in (raw or ())]
 
-    def history_deals_get(self, date_from: datetime, date_to: datetime,
-                          position: int | None = None) -> list[Deal]:
+    def history_deals_get(
+        self, date_from: datetime, date_to: datetime, position: int | None = None
+    ) -> list[Deal]:
         if position is not None:
             raw = self._mt5.history_deals_get(position=int(position))
         else:

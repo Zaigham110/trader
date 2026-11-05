@@ -1,4 +1,5 @@
 """YAML → Config with validation and stable hashes (R-009, R-033)."""
+
 from __future__ import annotations
 
 import hashlib

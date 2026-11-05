@@ -3,6 +3,7 @@
 The stub mimics the package's named tuples and numpy rate/tick arrays so the field mapping in
 `goldtrader.mt5.real` is verified on Linux; the real package is only ever imported on Windows.
 """
+
 from __future__ import annotations
 
 import sys
@@ -18,32 +19,117 @@ from goldtrader.mt5.protocol import MT5Client, MT5Error
 from goldtrader.mt5.real import RealMT5, bar_from_rate, tick_from_row, to_utc
 from goldtrader.types import OrderRequest
 
-AccountTuple = namedtuple("AccountInfo", [
-    "login", "trade_mode", "leverage", "limit_orders", "margin_so_mode", "trade_allowed",
-    "trade_expert", "margin_mode", "currency_digits", "fifo_close", "balance", "credit", "profit",
-    "equity", "margin", "margin_free", "margin_level", "margin_so_call", "margin_so_so",
-    "margin_initial", "margin_maintenance", "assets", "liabilities", "commission_blocked",
-    "name", "server", "currency", "company",
-])
-SymbolTuple = namedtuple("SymbolInfo", [
-    "name", "digits", "point", "trade_tick_size", "trade_tick_value", "trade_contract_size",
-    "volume_min", "volume_max", "volume_step", "volume_limit", "trade_stops_level",
-    "trade_freeze_level", "trade_mode", "trade_exemode", "filling_mode", "swap_mode", "swap_long",
-    "swap_short", "swap_rollover3days", "margin_initial", "margin_hedged", "currency_base",
-    "currency_profit", "currency_margin", "spread", "spread_float", "description", "path",
-    "session_deals", "custom",
-])
-ResultTuple = namedtuple("OrderSendResult", [
-    "retcode", "deal", "order", "volume", "price", "bid", "ask", "comment", "request_id",
-    "retcode_external", "request",
-])
-PositionTuple = namedtuple("TradePosition", [
-    "ticket", "time", "time_msc", "time_update", "time_update_msc", "type", "magic", "identifier",
-    "reason", "volume", "price_open", "sl", "tp", "price_current", "swap", "profit", "symbol",
-    "comment", "external_id",
-])
-TickTuple = namedtuple("Tick", ["time", "bid", "ask", "last", "volume", "time_msc", "flags",
-                                "volume_real"])
+AccountTuple = namedtuple(
+    "AccountInfo",
+    [
+        "login",
+        "trade_mode",
+        "leverage",
+        "limit_orders",
+        "margin_so_mode",
+        "trade_allowed",
+        "trade_expert",
+        "margin_mode",
+        "currency_digits",
+        "fifo_close",
+        "balance",
+        "credit",
+        "profit",
+        "equity",
+        "margin",
+        "margin_free",
+        "margin_level",
+        "margin_so_call",
+        "margin_so_so",
+        "margin_initial",
+        "margin_maintenance",
+        "assets",
+        "liabilities",
+        "commission_blocked",
+        "name",
+        "server",
+        "currency",
+        "company",
+    ],
+)
+SymbolTuple = namedtuple(
+    "SymbolInfo",
+    [
+        "name",
+        "digits",
+        "point",
+        "trade_tick_size",
+        "trade_tick_value",
+        "trade_contract_size",
+        "volume_min",
+        "volume_max",
+        "volume_step",
+        "volume_limit",
+        "trade_stops_level",
+        "trade_freeze_level",
+        "trade_mode",
+        "trade_exemode",
+        "filling_mode",
+        "swap_mode",
+        "swap_long",
+        "swap_short",
+        "swap_rollover3days",
+        "margin_initial",
+        "margin_hedged",
+        "currency_base",
+        "currency_profit",
+        "currency_margin",
+        "spread",
+        "spread_float",
+        "description",
+        "path",
+        "session_deals",
+        "custom",
+    ],
+)
+ResultTuple = namedtuple(
+    "OrderSendResult",
+    [
+        "retcode",
+        "deal",
+        "order",
+        "volume",
+        "price",
+        "bid",
+        "ask",
+        "comment",
+        "request_id",
+        "retcode_external",
+        "request",
+    ],
+)
+PositionTuple = namedtuple(
+    "TradePosition",
+    [
+        "ticket",
+        "time",
+        "time_msc",
+        "time_update",
+        "time_update_msc",
+        "type",
+        "magic",
+        "identifier",
+        "reason",
+        "volume",
+        "price_open",
+        "sl",
+        "tp",
+        "price_current",
+        "swap",
+        "profit",
+        "symbol",
+        "comment",
+        "external_id",
+    ],
+)
+TickTuple = namedtuple(
+    "Tick", ["time", "bid", "ask", "last", "volume", "time_msc", "flags", "volume_real"]
+)
 
 
 def make_stub() -> types.ModuleType:
@@ -57,47 +143,181 @@ def make_stub() -> types.ModuleType:
         def fn(*a, **kw):
             stub.calls.append((name, a, kw))
             return stub.responses.get(name)
+
         return fn
 
-    for name in ("initialize", "shutdown", "login", "version", "last_error", "account_info",
-                 "terminal_info", "symbols_get", "symbol_info", "symbol_select",
-                 "symbol_info_tick", "copy_rates_from", "copy_rates_range", "copy_ticks_range",
-                 "copy_ticks_from", "order_calc_margin", "order_check", "order_send",
-                 "positions_get", "orders_get", "history_deals_get"):
+    for name in (
+        "initialize",
+        "shutdown",
+        "login",
+        "version",
+        "last_error",
+        "account_info",
+        "terminal_info",
+        "symbols_get",
+        "symbol_info",
+        "symbol_select",
+        "symbol_info_tick",
+        "copy_rates_from",
+        "copy_rates_range",
+        "copy_ticks_range",
+        "copy_ticks_from",
+        "order_calc_margin",
+        "order_check",
+        "order_send",
+        "positions_get",
+        "orders_get",
+        "history_deals_get",
+    ):
         setattr(stub, name, record(name))
     rates = np.array(
-        [(1_700_000_000, 4000.0, 4001.0, 3999.0, 4000.5, 120, 20, 0),
-         (1_700_000_060, 4000.5, 4002.0, 4000.0, 4001.5, 80, 25, 0)],
-        dtype=[("time", "<i8"), ("open", "<f8"), ("high", "<f8"), ("low", "<f8"),
-               ("close", "<f8"), ("tick_volume", "<u8"), ("spread", "<i4"),
-               ("real_volume", "<u8")])
-    ticks = np.array([(1_700_000_000, 4000.0, 4000.2, 0.0, 0, 1_700_000_000_123, 6, 0.0)],
-                     dtype=[("time", "<i8"), ("bid", "<f8"), ("ask", "<f8"), ("last", "<f8"),
-                            ("volume", "<u8"), ("time_msc", "<i8"), ("flags", "<u4"),
-                            ("volume_real", "<f8")])
+        [
+            (1_700_000_000, 4000.0, 4001.0, 3999.0, 4000.5, 120, 20, 0),
+            (1_700_000_060, 4000.5, 4002.0, 4000.0, 4001.5, 80, 25, 0),
+        ],
+        dtype=[
+            ("time", "<i8"),
+            ("open", "<f8"),
+            ("high", "<f8"),
+            ("low", "<f8"),
+            ("close", "<f8"),
+            ("tick_volume", "<u8"),
+            ("spread", "<i4"),
+            ("real_volume", "<u8"),
+        ],
+    )
+    ticks = np.array(
+        [(1_700_000_000, 4000.0, 4000.2, 0.0, 0, 1_700_000_000_123, 6, 0.0)],
+        dtype=[
+            ("time", "<i8"),
+            ("bid", "<f8"),
+            ("ask", "<f8"),
+            ("last", "<f8"),
+            ("volume", "<u8"),
+            ("time_msc", "<i8"),
+            ("flags", "<u4"),
+            ("volume_real", "<f8"),
+        ],
+    )
     stub.responses = {
-        "initialize": True, "login": True, "version": (500, 5120, "01 Jan 2026"),
+        "initialize": True,
+        "login": True,
+        "version": (500, 5120, "01 Jan 2026"),
         "last_error": (1, "Success"),
-        "account_info": AccountTuple(1, 0, 500, 1000, 0, True, True, 2, 2, False, 5000.0, 0.0,
-                                     0.0, 5000.0, 0.0, 5000.0, 0.0, 60.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-                                     0.0, "Owner", "Exness-MT5Trial", "USD", "Exness"),
-        "symbols_get": (SymbolTuple._make(["XAUUSDm"] + [0] * 29),
-                        SymbolTuple._make(["XAUUSD247m"] + [0] * 29)),
-        "symbol_info": SymbolTuple("XAUUSDm", 2, 0.01, 0.01, 1.0, 100.0, 0.01, 200.0, 0.01, 0.0,
-                                   0, 0, 4, 2, 3, 1, -30.0, 10.0, 3, 0.0, 0.0, "XAU", "USD", "USD",
-                                   20, True, "Gold", "Metals", 0, False),
-        "symbol_select": True, "symbol_info_tick": ticks[0],
-        "copy_rates_from": rates, "copy_rates_range": rates, "copy_ticks_range": ticks,
-        "copy_ticks_from": ticks, "order_calc_margin": 8.0,
-        "order_check": types.SimpleNamespace(_asdict=lambda: {
-            "retcode": 0, "balance": 5000.0, "equity": 5000.0, "profit": 0.0, "margin": 8.0,
-            "margin_free": 4992.0, "margin_level": 62500.0, "comment": "Done", "request": None}),
-        "order_send": ResultTuple(10009, 11, 12, 0.01, 4000.2, 4000.0, 4000.2, "Request executed",
-                                  1, 0, None),
-        "positions_get": (PositionTuple(12, 1_700_000_000, 1_700_000_000_000, 1_700_000_000, 0, 0,
-                                        7, 12, 3, 0.01, 4000.2, 0.0, 0.0, 4000.0, 0.0, -0.2,
-                                        "XAUUSDm", "", ""),),
-        "orders_get": None, "history_deals_get": None,
+        "account_info": AccountTuple(
+            1,
+            0,
+            500,
+            1000,
+            0,
+            True,
+            True,
+            2,
+            2,
+            False,
+            5000.0,
+            0.0,
+            0.0,
+            5000.0,
+            0.0,
+            5000.0,
+            0.0,
+            60.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            "Owner",
+            "Exness-MT5Trial",
+            "USD",
+            "Exness",
+        ),
+        "symbols_get": (
+            SymbolTuple._make(["XAUUSDm"] + [0] * 29),
+            SymbolTuple._make(["XAUUSD247m"] + [0] * 29),
+        ),
+        "symbol_info": SymbolTuple(
+            "XAUUSDm",
+            2,
+            0.01,
+            0.01,
+            1.0,
+            100.0,
+            0.01,
+            200.0,
+            0.01,
+            0.0,
+            0,
+            0,
+            4,
+            2,
+            3,
+            1,
+            -30.0,
+            10.0,
+            3,
+            0.0,
+            0.0,
+            "XAU",
+            "USD",
+            "USD",
+            20,
+            True,
+            "Gold",
+            "Metals",
+            0,
+            False,
+        ),
+        "symbol_select": True,
+        "symbol_info_tick": ticks[0],
+        "copy_rates_from": rates,
+        "copy_rates_range": rates,
+        "copy_ticks_range": ticks,
+        "copy_ticks_from": ticks,
+        "order_calc_margin": 8.0,
+        "order_check": types.SimpleNamespace(
+            _asdict=lambda: {
+                "retcode": 0,
+                "balance": 5000.0,
+                "equity": 5000.0,
+                "profit": 0.0,
+                "margin": 8.0,
+                "margin_free": 4992.0,
+                "margin_level": 62500.0,
+                "comment": "Done",
+                "request": None,
+            }
+        ),
+        "order_send": ResultTuple(
+            10009, 11, 12, 0.01, 4000.2, 4000.0, 4000.2, "Request executed", 1, 0, None
+        ),
+        "positions_get": (
+            PositionTuple(
+                12,
+                1_700_000_000,
+                1_700_000_000_000,
+                1_700_000_000,
+                0,
+                0,
+                7,
+                12,
+                3,
+                0.01,
+                4000.2,
+                0.0,
+                0.0,
+                4000.0,
+                0.0,
+                -0.2,
+                "XAUUSDm",
+                "",
+                "",
+            ),
+        ),
+        "orders_get": None,
+        "history_deals_get": None,
     }
     return stub
 
@@ -123,8 +343,12 @@ def test_real_satisfies_protocol_and_maps_structures(real):
     name, args, kwargs = real.stub.calls[-1]
     assert name == "initialize" and kwargs["password"] == "s3cret" and args == ()
     acct = real.account_info()
-    assert acct.login == 1 and acct.margin_mode == 2 and acct.company == "Exness" \
+    assert (
+        acct.login == 1
+        and acct.margin_mode == 2
+        and acct.company == "Exness"
         and acct.name == "Owner"
+    )
     spec = real.symbol_info("XAUUSDm")
     assert spec.trade_contract_size == 100.0 and spec.filling_mode == 3 and spec.path == "Metals"
     assert real.symbols_get("*XAU*") == ["XAUUSDm", "XAUUSD247m"]
@@ -138,8 +362,10 @@ def test_real_satisfies_protocol_and_maps_structures(real):
     pos = real.positions_get(ticket=12)
     assert len(pos) == 1 and pos[0].identifier == 12 and pos[0].side == "long"
     assert real.stub.calls[-1][2] == {"ticket": 12}
-    assert real.orders_get() == [] and real.history_deals_get(datetime.now(UTC),
-                                                              datetime.now(UTC)) == []
+    assert (
+        real.orders_get() == []
+        and real.history_deals_get(datetime.now(UTC), datetime.now(UTC)) == []
+    )
     assert real.order_calc_margin(0, "XAUUSDm", 0.01, 4000.0) == 8.0
     assert real.version() == (500, 5120, "01 Jan 2026") and real.last_error() == (1, "Success")
 
@@ -152,8 +378,12 @@ def test_rates_are_bid_based_and_ask_adds_spread(real):
     assert (b.bid_open, b.bid_high, b.bid_low, b.bid_close) == (4000.0, 4001.0, 3999.0, 4000.5)
     assert b.ask_close == pytest.approx(4000.5 + 20 * 0.01)
     assert b.ask_high == pytest.approx(4001.0 + 0.20)
-    ticks = real.copy_ticks_range("XAUUSDm", datetime(2023, 11, 1, tzinfo=UTC),
-                                  datetime(2023, 12, 1, tzinfo=UTC), K.COPY_TICKS_ALL)
+    ticks = real.copy_ticks_range(
+        "XAUUSDm",
+        datetime(2023, 11, 1, tzinfo=UTC),
+        datetime(2023, 12, 1, tzinfo=UTC),
+        K.COPY_TICKS_ALL,
+    )
     assert ticks[0].bid == 4000.0 and ticks[0].time_msc == 1_700_000_000_123
     real.stub.responses["copy_rates_from"] = None
     assert real.copy_rates_from("XAUUSDm", K.TIMEFRAME_M1, datetime.now(UTC), 1) is None
@@ -170,8 +400,20 @@ def test_datetimes_are_passed_as_aware_utc(real):
 
 
 def test_row_helpers_accept_mappings():
-    bar = bar_from_rate({"time": 60, "open": 1.0, "high": 2.0, "low": 0.5, "close": 1.5,
-                         "tick_volume": 3, "spread": 10, "real_volume": 0}, 0.01, 60)
+    bar = bar_from_rate(
+        {
+            "time": 60,
+            "open": 1.0,
+            "high": 2.0,
+            "low": 0.5,
+            "close": 1.5,
+            "tick_volume": 3,
+            "spread": 10,
+            "real_volume": 0,
+        },
+        0.01,
+        60,
+    )
     assert bar.ask_open == pytest.approx(1.1) and bar.ticks == 3
     tick = tick_from_row(TickTuple(1, 1.0, 1.1, 0.0, 0, 1000, 6, 0.0))
     assert tick.spread == pytest.approx(0.1) and tick.time_msc == 1000

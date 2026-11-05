@@ -15,6 +15,7 @@ Rules (all enforced in code, none configurable away):
     rejected if it exceeds the configured risk per trade; daily and weekly loss limits block
     entries; the drawdown limit stops the run (kill switch). Spread cap and 'wide' regime block.
 """
+
 from __future__ import annotations
 
 import math
@@ -32,9 +33,27 @@ from goldtrader.session.state import SessionClock
 from goldtrader.types import SessionState, SymbolSpec
 
 TRADE_COLUMNS = [
-    "entry_time", "exit_time", "side", "volume", "entry_price", "exit_price", "sl", "tp",
-    "gross_pnl", "spread_cost", "slippage_cost", "commission", "swap", "net_pnl", "r_multiple",
-    "exit_reason", "risk_pct", "stop_distance", "atr_at_entry", "regime", "session_hour",
+    "entry_time",
+    "exit_time",
+    "side",
+    "volume",
+    "entry_price",
+    "exit_price",
+    "sl",
+    "tp",
+    "gross_pnl",
+    "spread_cost",
+    "slippage_cost",
+    "commission",
+    "swap",
+    "net_pnl",
+    "r_multiple",
+    "exit_reason",
+    "risk_pct",
+    "stop_distance",
+    "atr_at_entry",
+    "regime",
+    "session_hour",
     "bars_held",
 ]
 
@@ -42,8 +61,8 @@ TRADE_COLUMNS = [
 @dataclass
 class BacktestResult:
     trades: pd.DataFrame
-    equity: pd.Series                      # equity marked at every bar close (index = bar time, UTC)
-    daily_returns: pd.Series               # simple returns per trading day
+    equity: pd.Series  # equity marked at every bar close (index = bar time, UTC)
+    daily_returns: pd.Series  # simple returns per trading day
     rejected: dict[str, int] = field(default_factory=dict)
     killed_at: datetime | None = None
     config_summary: dict = field(default_factory=dict)
@@ -75,7 +94,9 @@ def _round_volume(v: float, spec: SymbolSpec) -> float:
     return round(steps * spec.volume_step, 8)
 
 
-def size_position(equity: float, stop_distance: float, spec: SymbolSpec, cfg: Config) -> tuple[float, float]:
+def size_position(
+    equity: float, stop_distance: float, spec: SymbolSpec, cfg: Config
+) -> tuple[float, float]:
     """Return (volume, risk_pct). Risk-based sizing clamped to [volume_min, max_volume_lots].
 
     If the risk-based volume is below volume_min, the minimum is used and the realised risk % is
@@ -103,10 +124,26 @@ def run_backtest(
     events: list[Event] | tuple[Event, ...] = (),
     equity0: float = 5000.0,
 ) -> BacktestResult:
-    cost = cost or CostModel(commission_per_lot_per_side_usd=cfg.account.commission_per_lot_per_side_usd)
+    cost = cost or CostModel(
+        commission_per_lot_per_side_usd=cfg.account.commission_per_lot_per_side_usd
+    )
     clock = clock or SessionClock(cfg.session)
-    required = {"time", "bid_open", "bid_high", "bid_low", "ask_open", "ask_high", "ask_low",
-                "bid_close", "ask_close", "atr", "spread_pips", "spread_regime", "regime", "hour_utc"}
+    required = {
+        "time",
+        "bid_open",
+        "bid_high",
+        "bid_low",
+        "ask_open",
+        "ask_high",
+        "ask_low",
+        "bid_close",
+        "ask_close",
+        "atr",
+        "spread_pips",
+        "spread_regime",
+        "regime",
+        "hour_utc",
+    }
     missing = required - set(df.columns)
     if missing:
         raise ValueError(f"features frame missing columns: {sorted(missing)}")
@@ -116,8 +153,12 @@ def run_backtest(
     sig = strategy.signals(df)
     n = len(df)
     t = df["time"].to_numpy(dtype=np.int64)
-    bo, bh, bl, bc = (df[c].to_numpy(dtype=float) for c in ("bid_open", "bid_high", "bid_low", "bid_close"))
-    ao, ah, al, ac = (df[c].to_numpy(dtype=float) for c in ("ask_open", "ask_high", "ask_low", "ask_close"))
+    bo, bh, bl, bc = (
+        df[c].to_numpy(dtype=float) for c in ("bid_open", "bid_high", "bid_low", "bid_close")
+    )
+    ao, ah, al, ac = (
+        df[c].to_numpy(dtype=float) for c in ("ask_open", "ask_high", "ask_low", "ask_close")
+    )
     atr = df["atr"].to_numpy(dtype=float)
     spread_pips = df["spread_pips"].to_numpy(dtype=float)
     spread_regime = df["spread_regime"].astype(str).to_numpy()
@@ -168,17 +209,32 @@ def run_backtest(
         day_pnl[day] = day_pnl.get(day, 0.0) + net
         week_pnl[week] = week_pnl.get(week, 0.0) + net
         risk_usd = pos.stop_distance * pos.volume * contract
-        trades.append({
-            "entry_time": pos.entry_time, "exit_time": int(t[i]), "side": pos.side,
-            "volume": pos.volume, "entry_price": pos.entry_price, "exit_price": price,
-            "sl": pos.sl, "tp": pos.tp, "gross_pnl": gross + spread_cost + slippage_cost,
-            "spread_cost": spread_cost, "slippage_cost": slippage_cost, "commission": commission,
-            "swap": 0.0, "net_pnl": net, "r_multiple": net / risk_usd if risk_usd > 0 else 0.0,
-            "exit_reason": reason, "risk_pct": pos.risk_pct, "stop_distance": pos.stop_distance,
-            "atr_at_entry": pos.atr, "regime": pos.regime,
-            "session_hour": int(datetime.fromtimestamp(pos.entry_time, UTC).hour),
-            "bars_held": pos.bars_held,
-        })
+        trades.append(
+            {
+                "entry_time": pos.entry_time,
+                "exit_time": int(t[i]),
+                "side": pos.side,
+                "volume": pos.volume,
+                "entry_price": pos.entry_price,
+                "exit_price": price,
+                "sl": pos.sl,
+                "tp": pos.tp,
+                "gross_pnl": gross + spread_cost + slippage_cost,
+                "spread_cost": spread_cost,
+                "slippage_cost": slippage_cost,
+                "commission": commission,
+                "swap": 0.0,
+                "net_pnl": net,
+                "r_multiple": net / risk_usd if risk_usd > 0 else 0.0,
+                "exit_reason": reason,
+                "risk_pct": pos.risk_pct,
+                "stop_distance": pos.stop_distance,
+                "atr_at_entry": pos.atr,
+                "regime": pos.regime,
+                "session_hour": int(datetime.fromtimestamp(pos.entry_time, UTC).hour),
+                "bars_held": pos.bars_held,
+            }
+        )
         if net < 0:
             consecutive_losses += 1
             if consecutive_losses >= r.consecutive_loss_pause:
@@ -228,9 +284,15 @@ def run_backtest(
                     sl = entry - stop_distance if side == "long" else entry + stop_distance
                     tp = entry + target_atr * a if side == "long" else entry - target_atr * a
                     pos = _Open(
-                        side=side, volume=vol, entry_price=entry, entry_time=int(t[i]),
-                        sl=round(sl, spec.digits), tp=round(tp, spec.digits),
-                        stop_distance=stop_distance, risk_pct=risk_pct, atr=float(a),
+                        side=side,
+                        volume=vol,
+                        entry_price=entry,
+                        entry_time=int(t[i]),
+                        sl=round(sl, spec.digits),
+                        tp=round(tp, spec.digits),
+                        stop_distance=stop_distance,
+                        risk_pct=risk_pct,
+                        atr=float(a),
                         regime=str(regime[i - 1]),
                         spread_cost_entry=abs(entry - mid) * vol * contract,
                         slip_cost_entry=cost.slippage_points * spec.point * vol * contract,
@@ -242,8 +304,12 @@ def run_backtest(
         # 2. manage the open position on this bar
         if pos is not None:
             pos.bars_held += 1
-            if state in (SessionState.PRE_BREAK_BUFFER, SessionState.CLOSE_ONLY, SessionState.CLOSED,
-                         SessionState.STALE):
+            if state in (
+                SessionState.PRE_BREAK_BUFFER,
+                SessionState.CLOSE_ONLY,
+                SessionState.CLOSED,
+                SessionState.STALE,
+            ):
                 close_position(i, cost.exit_price(pos.side, bo[i], ao[i], spec), "session_flatten")
             else:
                 if pos.side == "long":
@@ -292,9 +358,16 @@ def run_backtest(
     daily_ret = daily.pct_change().dropna()
     trades_df = pd.DataFrame(trades, columns=TRADE_COLUMNS)
     return BacktestResult(
-        trades=trades_df, equity=eq, daily_returns=daily_ret, rejected=rejected,
+        trades=trades_df,
+        equity=eq,
+        daily_returns=daily_ret,
+        rejected=rejected,
         killed_at=killed_at,
-        config_summary={"profile": cfg.owner.profile, "risk": cfg.owner.risk.model_dump(),
-                        "cost": cost.as_dict(), "strategy": getattr(strategy, "id", "?"),
-                        "equity0": equity0},
+        config_summary={
+            "profile": cfg.owner.profile,
+            "risk": cfg.owner.risk.model_dump(),
+            "cost": cost.as_dict(),
+            "strategy": getattr(strategy, "id", "?"),
+            "equity0": equity0,
+        },
     )

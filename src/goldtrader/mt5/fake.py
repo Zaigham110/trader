@@ -24,6 +24,7 @@ fill would already be beyond its own SL/TP.
 Everything is deterministic: tickets come from one counter, times from the fed ticks and the
 rate limiter uses an injectable `clock`.
 """
+
 from __future__ import annotations
 
 import time
@@ -56,8 +57,10 @@ DEAL_REASON_TP = 5
 ORDER_STATE_PLACED = 1
 
 _PENDING_TYPES = {
-    K.ORDER_TYPE_BUY_LIMIT, K.ORDER_TYPE_SELL_LIMIT,
-    K.ORDER_TYPE_BUY_STOP, K.ORDER_TYPE_SELL_STOP,
+    K.ORDER_TYPE_BUY_LIMIT,
+    K.ORDER_TYPE_SELL_LIMIT,
+    K.ORDER_TYPE_BUY_STOP,
+    K.ORDER_TYPE_SELL_STOP,
 }
 _BUY_TYPES = {K.ORDER_TYPE_BUY, K.ORDER_TYPE_BUY_LIMIT, K.ORDER_TYPE_BUY_STOP}
 _FILL_FLAG = {
@@ -70,23 +73,59 @@ _FILL_FLAG = {
 _UTC = UTC
 
 DEFAULT_SPEC = SymbolSpec(
-    name="XAUUSDm", digits=2, point=0.01, trade_tick_size=0.01, trade_tick_value=1.0,
-    trade_contract_size=100.0, volume_min=0.01, volume_max=200.0, volume_step=0.01,
-    volume_limit=0.0, trade_stops_level=0, trade_freeze_level=0,
-    trade_mode=K.SYMBOL_TRADE_MODE_FULL, trade_exemode=K.SYMBOL_TRADE_EXECUTION_MARKET,
-    filling_mode=K.SYMBOL_FILLING_FOK | K.SYMBOL_FILLING_IOC, swap_mode=1,
-    swap_long=-30.0, swap_short=10.0, swap_rollover3days=3, margin_initial=0.0,
-    margin_hedged=0.0, currency_base="XAU", currency_profit="USD", currency_margin="USD",
-    spread=20, spread_float=True, description="Gold vs US Dollar", path="Metals\\XAUUSDm",
+    name="XAUUSDm",
+    digits=2,
+    point=0.01,
+    trade_tick_size=0.01,
+    trade_tick_value=1.0,
+    trade_contract_size=100.0,
+    volume_min=0.01,
+    volume_max=200.0,
+    volume_step=0.01,
+    volume_limit=0.0,
+    trade_stops_level=0,
+    trade_freeze_level=0,
+    trade_mode=K.SYMBOL_TRADE_MODE_FULL,
+    trade_exemode=K.SYMBOL_TRADE_EXECUTION_MARKET,
+    filling_mode=K.SYMBOL_FILLING_FOK | K.SYMBOL_FILLING_IOC,
+    swap_mode=1,
+    swap_long=-30.0,
+    swap_short=10.0,
+    swap_rollover3days=3,
+    margin_initial=0.0,
+    margin_hedged=0.0,
+    currency_base="XAU",
+    currency_profit="USD",
+    currency_margin="USD",
+    spread=20,
+    spread_float=True,
+    description="Gold vs US Dollar",
+    path="Metals\\XAUUSDm",
 )
 
 DEFAULT_ACCOUNT = AccountInfo(
-    login=10000001, trade_mode=K.ACCOUNT_TRADE_MODE_DEMO, leverage=500, limit_orders=1000,
-    margin_so_mode=0, trade_allowed=True, trade_expert=True,
-    margin_mode=K.ACCOUNT_MARGIN_MODE_RETAIL_HEDGING, currency_digits=2, balance=5000.0,
-    credit=0.0, profit=0.0, equity=5000.0, margin=0.0, margin_free=5000.0, margin_level=0.0,
-    margin_so_call=60.0, margin_so_so=0.0, currency="USD", server="Exness-MT5Trial",
-    company="Exness Technologies Ltd", name="Fake Trader",
+    login=10000001,
+    trade_mode=K.ACCOUNT_TRADE_MODE_DEMO,
+    leverage=500,
+    limit_orders=1000,
+    margin_so_mode=0,
+    trade_allowed=True,
+    trade_expert=True,
+    margin_mode=K.ACCOUNT_MARGIN_MODE_RETAIL_HEDGING,
+    currency_digits=2,
+    balance=5000.0,
+    credit=0.0,
+    profit=0.0,
+    equity=5000.0,
+    margin=0.0,
+    margin_free=5000.0,
+    margin_level=0.0,
+    margin_so_call=60.0,
+    margin_so_so=0.0,
+    currency="USD",
+    server="Exness-MT5Trial",
+    company="Exness Technologies Ltd",
+    name="Fake Trader",
 )
 
 
@@ -112,8 +151,18 @@ def bars_from_ticks(ticks: list[Tick], seconds: int) -> list[Bar]:
         if cur is None or cur["time"] != open_time:
             if cur is not None:
                 bars.append(_close_bar(cur))
-            cur = {"time": open_time, "bo": t.bid, "bh": t.bid, "bl": t.bid, "bc": t.bid,
-                   "ao": t.ask, "ah": t.ask, "al": t.ask, "ac": t.ask, "n": 1}
+            cur = {
+                "time": open_time,
+                "bo": t.bid,
+                "bh": t.bid,
+                "bl": t.bid,
+                "bc": t.bid,
+                "ao": t.ask,
+                "ah": t.ask,
+                "al": t.ask,
+                "ac": t.ask,
+                "n": 1,
+            }
             continue
         cur["bh"] = max(cur["bh"], t.bid)
         cur["bl"] = min(cur["bl"], t.bid)
@@ -129,9 +178,19 @@ def bars_from_ticks(ticks: list[Tick], seconds: int) -> list[Bar]:
 
 
 def _close_bar(c: dict) -> Bar:
-    return Bar(time=c["time"], seconds=0, bid_open=c["bo"], bid_high=c["bh"], bid_low=c["bl"],
-               bid_close=c["bc"], ask_open=c["ao"], ask_high=c["ah"], ask_low=c["al"],
-               ask_close=c["ac"], ticks=c["n"])
+    return Bar(
+        time=c["time"],
+        seconds=0,
+        bid_open=c["bo"],
+        bid_high=c["bh"],
+        bid_low=c["bl"],
+        bid_close=c["bc"],
+        ask_open=c["ao"],
+        ask_high=c["ah"],
+        ask_low=c["al"],
+        ask_close=c["ac"],
+        ticks=c["n"],
+    )
 
 
 def _ms(dt: datetime) -> int:
@@ -143,6 +202,7 @@ def _ms(dt: datetime) -> int:
 @dataclass
 class _Pos:
     """Mutable position record; `Position` snapshots are built on read."""
+
     ticket: int
     time_msc: int
     time_update: int
@@ -267,8 +327,9 @@ class FakeMT5:
         return tick
 
     # ------------------------------------------------------------------ connection
-    def initialize(self, path=None, login=None, password=None, server=None, timeout=60000,
-                   portable=False) -> bool:
+    def initialize(
+        self, path=None, login=None, password=None, server=None, timeout=60000, portable=False
+    ) -> bool:
         del path, login, password, server, timeout, portable  # never logged
         if not self.init_ok:
             self._last_error = (K.RES_E_INTERNAL_FAIL_INIT, "Internal IPC initialization failed")
@@ -305,8 +366,12 @@ class FakeMT5:
         margin = self._margin_used()
         equity = self.balance + self.credit + profit
         return replace(
-            self._acct, balance=round(self.balance, 2), credit=self.credit,
-            profit=round(profit, 2), equity=round(equity, 2), margin=round(margin, 2),
+            self._acct,
+            balance=round(self.balance, 2),
+            credit=self.credit,
+            profit=round(profit, 2),
+            equity=round(equity, 2),
+            margin=round(margin, 2),
             margin_free=round(equity - margin, 2),
             margin_level=round(equity / margin * 100.0, 2) if margin > 0 else 0.0,
         )
@@ -314,11 +379,18 @@ class FakeMT5:
     def terminal_info(self) -> TerminalInfo | None:
         if not self.initialized:
             return None
-        return TerminalInfo(connected=self.connected, trade_allowed=self.autotrading_enabled,
-                            tradeapi_disabled=False, build=self.build, maxbars=100000,
-                            ping_last=self.ping_last, dlls_allowed=False,
-                            company="MetaQuotes Ltd. (fake)", name="MetaTrader 5 (fake)",
-                            path="C:\\fake\\terminal64.exe")
+        return TerminalInfo(
+            connected=self.connected,
+            trade_allowed=self.autotrading_enabled,
+            tradeapi_disabled=False,
+            build=self.build,
+            maxbars=100000,
+            ping_last=self.ping_last,
+            dlls_allowed=False,
+            company="MetaQuotes Ltd. (fake)",
+            name="MetaTrader 5 (fake)",
+            path="C:\\fake\\terminal64.exe",
+        )
 
     # ------------------------------------------------------------------ symbols
     def symbols_get(self, group: str | None = None) -> list[str]:
@@ -360,8 +432,9 @@ class FakeMT5:
         return self.tick
 
     # ------------------------------------------------------------------ history
-    def copy_rates_from(self, symbol: str, timeframe: int, date_from: datetime, count: int
-                        ) -> list[Bar] | None:
+    def copy_rates_from(
+        self, symbol: str, timeframe: int, date_from: datetime, count: int
+    ) -> list[Bar] | None:
         bars = self._bars(symbol, timeframe)
         if bars is None:
             return None
@@ -369,16 +442,18 @@ class FakeMT5:
         sel = [b for b in bars if b.time <= end][-count:] if count > 0 else []
         return self._or_none(sel)
 
-    def copy_rates_range(self, symbol: str, timeframe: int, date_from: datetime, date_to: datetime
-                         ) -> list[Bar] | None:
+    def copy_rates_range(
+        self, symbol: str, timeframe: int, date_from: datetime, date_to: datetime
+    ) -> list[Bar] | None:
         bars = self._bars(symbol, timeframe)
         if bars is None:
             return None
         lo, hi = _ms(date_from) // 1000, _ms(date_to) // 1000
         return self._or_none([b for b in bars if lo <= b.time <= hi])
 
-    def copy_ticks_range(self, symbol: str, date_from: datetime, date_to: datetime, flags: int
-                         ) -> list[Tick] | None:
+    def copy_ticks_range(
+        self, symbol: str, date_from: datetime, date_to: datetime, flags: int
+    ) -> list[Tick] | None:
         del flags
         if not self.initialized or symbol not in self.specs:
             self._last_error = (K.RES_E_NOT_FOUND, "symbol not found")
@@ -386,8 +461,9 @@ class FakeMT5:
         lo, hi = _ms(date_from), _ms(date_to)
         return self._or_none([t for t in self.ticks if lo <= t.time_msc <= hi])
 
-    def copy_ticks_from(self, symbol: str, date_from: datetime, count: int, flags: int
-                        ) -> list[Tick] | None:
+    def copy_ticks_from(
+        self, symbol: str, date_from: datetime, count: int, flags: int
+    ) -> list[Tick] | None:
         del flags
         if not self.initialized or symbol not in self.specs:
             self._last_error = (K.RES_E_NOT_FOUND, "symbol not found")
@@ -409,8 +485,9 @@ class FakeMT5:
         return rows
 
     # ------------------------------------------------------------------ trading: reads
-    def order_calc_margin(self, action: int, symbol: str, volume: float, price: float
-                          ) -> float | None:
+    def order_calc_margin(
+        self, action: int, symbol: str, volume: float, price: float
+    ) -> float | None:
         spec = self.specs.get(symbol)
         if spec is None or not self.initialized:
             self._last_error = (K.RES_E_INVALID_PARAMS, "unknown symbol")
@@ -430,15 +507,27 @@ class FakeMT5:
 
     def orders_get(self, symbol: str | None = None) -> list[PendingOrder]:
         return [
-            PendingOrder(ticket=o.ticket, time_setup=o.time_setup // 1000, type=o.type,
-                         state=ORDER_STATE_PLACED, magic=o.magic, volume_initial=o.volume,
-                         volume_current=o.volume, price_open=o.price, sl=o.sl, tp=o.tp,
-                         symbol=o.symbol, comment=o.comment)
-            for o in self._orders.values() if symbol is None or o.symbol == symbol
+            PendingOrder(
+                ticket=o.ticket,
+                time_setup=o.time_setup // 1000,
+                type=o.type,
+                state=ORDER_STATE_PLACED,
+                magic=o.magic,
+                volume_initial=o.volume,
+                volume_current=o.volume,
+                price_open=o.price,
+                sl=o.sl,
+                tp=o.tp,
+                symbol=o.symbol,
+                comment=o.comment,
+            )
+            for o in self._orders.values()
+            if symbol is None or o.symbol == symbol
         ]
 
-    def history_deals_get(self, date_from: datetime, date_to: datetime,
-                          position: int | None = None) -> list[Deal]:
+    def history_deals_get(
+        self, date_from: datetime, date_to: datetime, position: int | None = None
+    ) -> list[Deal]:
         if position is not None:
             return [d for d in self.deals if d.position_id == position]
         lo, hi = _ms(date_from), _ms(date_to)
@@ -459,8 +548,12 @@ class FakeMT5:
         free = acct.margin_free - margin
         total = acct.margin + margin
         return OrderCheckResult(
-            retcode=code, balance=acct.balance, equity=acct.equity, profit=acct.profit,
-            margin=round(total, 2), margin_free=round(free, 2),
+            retcode=code,
+            balance=acct.balance,
+            equity=acct.equity,
+            profit=acct.profit,
+            margin=round(total, 2),
+            margin_free=round(free, 2),
             margin_level=round(acct.equity / total * 100.0, 2) if total > 0 else 0.0,
             comment=comment,
         )
@@ -643,8 +736,10 @@ class FakeMT5:
         if price <= 0:
             return K.TRADE_RETCODE_INVALID_PRICE
         ok = {
-            K.ORDER_TYPE_BUY_LIMIT: price < ask, K.ORDER_TYPE_BUY_STOP: price > ask,
-            K.ORDER_TYPE_SELL_LIMIT: price > bid, K.ORDER_TYPE_SELL_STOP: price < bid,
+            K.ORDER_TYPE_BUY_LIMIT: price < ask,
+            K.ORDER_TYPE_BUY_STOP: price > ask,
+            K.ORDER_TYPE_SELL_LIMIT: price > bid,
+            K.ORDER_TYPE_SELL_STOP: price < bid,
         }[otype]
         del spec
         return K.TRADE_RETCODE_DONE if ok else K.TRADE_RETCODE_INVALID_PRICE
@@ -660,32 +755,67 @@ class FakeMT5:
 
     def _too_many_positions(self) -> bool:
         # hedging accounts count pending orders too (ENUM_TRADE_RETCODE docs for 10040)
-        return (self.max_positions is not None
-                and len(self._positions) + len(self._orders) >= self.max_positions)
+        return (
+            self.max_positions is not None
+            and len(self._positions) + len(self._orders) >= self.max_positions
+        )
 
     def _required_margin(self, spec: SymbolSpec, volume: float, price: float) -> float:
         return volume * spec.trade_contract_size * price / self._acct.leverage
 
     # ------------------------------------------------------------------ execution
-    def _open(self, r: OrderRequest, *, fill_price: float | None = None,
-              reason: int = DEAL_REASON_EXPERT, comment: str | None = None) -> OrderResult:
+    def _open(
+        self,
+        r: OrderRequest,
+        *,
+        fill_price: float | None = None,
+        reason: int = DEAL_REASON_EXPERT,
+        comment: str | None = None,
+    ) -> OrderResult:
         assert self.tick is not None
         spec = self.specs[r.symbol]
         slip = self.slippage_points * spec.point
         if fill_price is None:
-            fill_price = self.tick.ask + slip if r.type == K.ORDER_TYPE_BUY else self.tick.bid - slip
+            fill_price = (
+                self.tick.ask + slip if r.type == K.ORDER_TYPE_BUY else self.tick.bid - slip
+            )
         fill_price = round(fill_price, spec.digits)
         ticket = self._next_ticket()
-        pos = _Pos(ticket=ticket, time_msc=self.tick.time_msc, time_update=self.tick.time_msc // 1000,
-                   type=r.type, magic=r.magic, volume=r.volume, price_open=fill_price,
-                   sl=r.sl, tp=r.tp, symbol=r.symbol, comment=comment if comment is not None
-                   else r.comment)
+        pos = _Pos(
+            ticket=ticket,
+            time_msc=self.tick.time_msc,
+            time_update=self.tick.time_msc // 1000,
+            type=r.type,
+            magic=r.magic,
+            volume=r.volume,
+            price_open=fill_price,
+            sl=r.sl,
+            tp=r.tp,
+            symbol=r.symbol,
+            comment=comment if comment is not None else r.comment,
+        )
         self._positions[ticket] = pos
-        deal = self._book_deal(order=ticket, dtype=r.type, entry=K.DEAL_ENTRY_IN, position_id=ticket,
-                               volume=r.volume, price=fill_price, profit=0.0, magic=r.magic,
-                               symbol=r.symbol, comment=pos.comment, reason=reason)
-        return self._result(K.TRADE_RETCODE_DONE, "Request executed", deal=deal.ticket,
-                            order=ticket, volume=r.volume, price=fill_price)
+        deal = self._book_deal(
+            order=ticket,
+            dtype=r.type,
+            entry=K.DEAL_ENTRY_IN,
+            position_id=ticket,
+            volume=r.volume,
+            price=fill_price,
+            profit=0.0,
+            magic=r.magic,
+            symbol=r.symbol,
+            comment=pos.comment,
+            reason=reason,
+        )
+        return self._result(
+            K.TRADE_RETCODE_DONE,
+            "Request executed",
+            deal=deal.ticket,
+            order=ticket,
+            volume=r.volume,
+            price=fill_price,
+        )
 
     def _close(self, r: OrderRequest) -> OrderResult:
         p = self._positions[r.position]
@@ -694,29 +824,54 @@ class FakeMT5:
         slip = self.slippage_points * spec.point
         # closing a long sells at bid; closing a short buys at ask
         price = self.tick.bid - slip if p.type == K.POSITION_TYPE_BUY else self.tick.ask + slip
-        return self._close_at(p, r.volume, round(price, spec.digits), DEAL_REASON_EXPERT,
-                              comment=r.comment)
+        return self._close_at(
+            p, r.volume, round(price, spec.digits), DEAL_REASON_EXPERT, comment=r.comment
+        )
 
-    def _close_at(self, p: _Pos, volume: float, price: float, reason: int, *,
-                  comment: str = "", entry: int = K.DEAL_ENTRY_OUT, profit: float | None = None
-                  ) -> OrderResult:
+    def _close_at(
+        self,
+        p: _Pos,
+        volume: float,
+        price: float,
+        reason: int,
+        *,
+        comment: str = "",
+        entry: int = K.DEAL_ENTRY_OUT,
+        profit: float | None = None,
+    ) -> OrderResult:
         spec = self.specs[p.symbol]
         volume = min(volume, p.volume)
         if profit is None:
             profit = self._pnl(p, volume, price)
         order_ticket = self._next_ticket()
         close_type = K.DEAL_TYPE_SELL if p.type == K.POSITION_TYPE_BUY else K.DEAL_TYPE_BUY
-        deal = self._book_deal(order=order_ticket, dtype=close_type, entry=entry,
-                               position_id=p.ticket, volume=volume, price=price, profit=profit,
-                               magic=p.magic, symbol=p.symbol, comment=comment, reason=reason)
+        deal = self._book_deal(
+            order=order_ticket,
+            dtype=close_type,
+            entry=entry,
+            position_id=p.ticket,
+            volume=volume,
+            price=price,
+            profit=profit,
+            magic=p.magic,
+            symbol=p.symbol,
+            comment=comment,
+            reason=reason,
+        )
         remaining = round(p.volume - volume, 8)
         if remaining < spec.volume_step / 2:
             del self._positions[p.ticket]
         else:
             p.volume = remaining
             p.time_update = self.tick.time_msc // 1000 if self.tick else p.time_update
-        return self._result(K.TRADE_RETCODE_DONE, "Request executed", deal=deal.ticket,
-                            order=order_ticket, volume=volume, price=price)
+        return self._result(
+            K.TRADE_RETCODE_DONE,
+            "Request executed",
+            deal=deal.ticket,
+            order=order_ticket,
+            volume=volume,
+            price=price,
+        )
 
     def _sltp(self, r: OrderRequest) -> OrderResult:
         p = self._positions[r.position]
@@ -735,20 +890,44 @@ class FakeMT5:
         vol = min(a.volume, b.volume)
         buy, sell = (a, b) if a.type == K.POSITION_TYPE_BUY else (b, a)
         pnl = (sell.price_open - buy.price_open) * vol * spec.trade_contract_size
-        first = self._close_at(a, vol, b.price_open, DEAL_REASON_EXPERT, entry=K.DEAL_ENTRY_OUT_BY,
-                               profit=pnl, comment=r.comment)
-        self._close_at(b, vol, a.price_open, DEAL_REASON_EXPERT, entry=K.DEAL_ENTRY_OUT_BY,
-                       profit=0.0, comment=r.comment)
+        first = self._close_at(
+            a,
+            vol,
+            b.price_open,
+            DEAL_REASON_EXPERT,
+            entry=K.DEAL_ENTRY_OUT_BY,
+            profit=pnl,
+            comment=r.comment,
+        )
+        self._close_at(
+            b,
+            vol,
+            a.price_open,
+            DEAL_REASON_EXPERT,
+            entry=K.DEAL_ENTRY_OUT_BY,
+            profit=0.0,
+            comment=r.comment,
+        )
         return first
 
     def _place_pending(self, r: OrderRequest) -> OrderResult:
         assert self.tick is not None
         ticket = self._next_ticket()
-        self._orders[ticket] = _Order(ticket=ticket, time_setup=self.tick.time_msc, type=r.type,
-                                      magic=r.magic, volume=r.volume, price=r.price, sl=r.sl,
-                                      tp=r.tp, symbol=r.symbol, comment=r.comment)
-        return self._result(K.TRADE_RETCODE_PLACED, "Request placed", order=ticket,
-                            volume=r.volume, price=r.price)
+        self._orders[ticket] = _Order(
+            ticket=ticket,
+            time_setup=self.tick.time_msc,
+            type=r.type,
+            magic=r.magic,
+            volume=r.volume,
+            price=r.price,
+            sl=r.sl,
+            tp=r.tp,
+            symbol=r.symbol,
+            comment=r.comment,
+        )
+        return self._result(
+            K.TRADE_RETCODE_PLACED, "Request placed", order=ticket, volume=r.volume, price=r.price
+        )
 
     def _modify_pending(self, r: OrderRequest) -> OrderResult:
         o = self._orders[r.order]
@@ -788,8 +967,10 @@ class FakeMT5:
         buy = o.type in _BUY_TYPES
         market = tick.ask if buy else tick.bid
         hit = {
-            K.ORDER_TYPE_BUY_LIMIT: market <= o.price, K.ORDER_TYPE_BUY_STOP: market >= o.price,
-            K.ORDER_TYPE_SELL_LIMIT: market >= o.price, K.ORDER_TYPE_SELL_STOP: market <= o.price,
+            K.ORDER_TYPE_BUY_LIMIT: market <= o.price,
+            K.ORDER_TYPE_BUY_STOP: market >= o.price,
+            K.ORDER_TYPE_SELL_LIMIT: market >= o.price,
+            K.ORDER_TYPE_SELL_STOP: market <= o.price,
         }[o.type]
         if not hit:
             return
@@ -800,9 +981,8 @@ class FakeMT5:
         # already beyond its SL, is cancelled instead of opened (research §4)
         is_stop = o.type in (K.ORDER_TYPE_BUY_STOP, K.ORDER_TYPE_SELL_STOP)
         violated = (
-            (is_stop and o.tp and ((buy and fill >= o.tp) or (not buy and fill <= o.tp)))
-            or (not is_stop and o.sl and ((buy and fill <= o.sl) or (not buy and fill >= o.sl)))
-        )
+            is_stop and o.tp and ((buy and fill >= o.tp) or (not buy and fill <= o.tp))
+        ) or (not is_stop and o.sl and ((buy and fill <= o.sl) or (not buy and fill >= o.sl)))
         if violated:
             self.cancelled_orders.append((o.ticket, "[SL violated]"))
             return
@@ -811,17 +991,26 @@ class FakeMT5:
         if acct is None or acct.margin_free < margin:
             self.cancelled_orders.append((o.ticket, "[no money]"))
             return
-        req = OrderRequest(action=K.TRADE_ACTION_DEAL, symbol=o.symbol, volume=o.volume,
-                           type=K.ORDER_TYPE_BUY if buy else K.ORDER_TYPE_SELL, price=o.price,
-                           sl=o.sl, tp=o.tp, magic=o.magic, comment=o.comment)
+        req = OrderRequest(
+            action=K.TRADE_ACTION_DEAL,
+            symbol=o.symbol,
+            volume=o.volume,
+            type=K.ORDER_TYPE_BUY if buy else K.ORDER_TYPE_SELL,
+            price=o.price,
+            sl=o.sl,
+            tp=o.tp,
+            magic=o.magic,
+            comment=o.comment,
+        )
         self._open(req, fill_price=fill, reason=DEAL_REASON_EXPERT)
 
     # ------------------------------------------------------------------ math
     def _profit(self, p: _Pos) -> float:
         if self.tick is None:
             return 0.0
-        return self._pnl(p, p.volume, self.tick.bid if p.type == K.POSITION_TYPE_BUY
-                         else self.tick.ask)
+        return self._pnl(
+            p, p.volume, self.tick.bid if p.type == K.POSITION_TYPE_BUY else self.tick.ask
+        )
 
     def _pnl(self, p: _Pos, volume: float, price: float) -> float:
         spec = self.specs[p.symbol]
@@ -829,39 +1018,99 @@ class FakeMT5:
         return round(diff * volume * spec.trade_contract_size, 2)
 
     def _margin_used(self) -> float:
-        return sum(self._required_margin(self.specs[p.symbol], p.volume, p.price_open)
-                   for p in self._positions.values() if p.symbol in self.specs)
+        return sum(
+            self._required_margin(self.specs[p.symbol], p.volume, p.price_open)
+            for p in self._positions.values()
+            if p.symbol in self.specs
+        )
 
     def _snapshot(self, p: _Pos) -> Position:
         price_current = 0.0
         if self.tick is not None:
             price_current = self.tick.bid if p.type == K.POSITION_TYPE_BUY else self.tick.ask
-        return Position(ticket=p.ticket, time=p.time_msc // 1000, time_msc=p.time_msc,
-                        time_update=p.time_update, type=p.type, magic=p.magic,
-                        identifier=p.ticket, reason=3, volume=p.volume, price_open=p.price_open,
-                        sl=p.sl, tp=p.tp, price_current=price_current, swap=0.0,
-                        profit=self._profit(p), symbol=p.symbol, comment=p.comment)
+        return Position(
+            ticket=p.ticket,
+            time=p.time_msc // 1000,
+            time_msc=p.time_msc,
+            time_update=p.time_update,
+            type=p.type,
+            magic=p.magic,
+            identifier=p.ticket,
+            reason=3,
+            volume=p.volume,
+            price_open=p.price_open,
+            sl=p.sl,
+            tp=p.tp,
+            price_current=price_current,
+            swap=0.0,
+            profit=self._profit(p),
+            symbol=p.symbol,
+            comment=p.comment,
+        )
 
-    def _book_deal(self, *, order: int, dtype: int, entry: int, position_id: int, volume: float,
-                   price: float, profit: float, magic: int, symbol: str, comment: str,
-                   reason: int) -> Deal:
+    def _book_deal(
+        self,
+        *,
+        order: int,
+        dtype: int,
+        entry: int,
+        position_id: int,
+        volume: float,
+        price: float,
+        profit: float,
+        magic: int,
+        symbol: str,
+        comment: str,
+        reason: int,
+    ) -> Deal:
         assert self.tick is not None
         commission = -round(self.commission_per_lot_per_side * volume, 2)
-        deal = Deal(ticket=self._next_ticket(), order=order, time=self.tick.time_msc // 1000,
-                    time_msc=self.tick.time_msc, type=dtype, entry=entry, magic=magic,
-                    position_id=position_id, reason=reason, volume=volume, price=price,
-                    commission=commission, swap=0.0, profit=profit, fee=0.0, symbol=symbol,
-                    comment=comment)
+        deal = Deal(
+            ticket=self._next_ticket(),
+            order=order,
+            time=self.tick.time_msc // 1000,
+            time_msc=self.tick.time_msc,
+            type=dtype,
+            entry=entry,
+            magic=magic,
+            position_id=position_id,
+            reason=reason,
+            volume=volume,
+            price=price,
+            commission=commission,
+            swap=0.0,
+            profit=profit,
+            fee=0.0,
+            symbol=symbol,
+            comment=comment,
+        )
         self.deals.append(deal)
         self.balance = round(self.balance + profit + commission, 2)
         return deal
 
-    def _result(self, retcode: int, comment: str, *, deal: int = 0, order: int = 0,
-                volume: float = 0.0, price: float = 0.0) -> OrderResult:
+    def _result(
+        self,
+        retcode: int,
+        comment: str,
+        *,
+        deal: int = 0,
+        order: int = 0,
+        volume: float = 0.0,
+        price: float = 0.0,
+    ) -> OrderResult:
         bid = self.tick.bid if self.tick else 0.0
         ask = self.tick.ask if self.tick else 0.0
-        res = OrderResult(retcode=retcode, deal=deal, order=order, volume=volume, price=price,
-                          bid=bid, ask=ask, comment=comment, request_id=self._request_id)
+        res = OrderResult(
+            retcode=retcode,
+            deal=deal,
+            order=order,
+            volume=volume,
+            price=price,
+            bid=bid,
+            ask=ask,
+            comment=comment,
+            request_id=self._request_id,
+        )
         self.results.append(res)
         return res
 

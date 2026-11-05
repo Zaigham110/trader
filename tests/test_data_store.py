@@ -1,4 +1,5 @@
 """Parquet/CSV cache and data snapshot ids (R-031)."""
+
 from __future__ import annotations
 
 from datetime import UTC, datetime

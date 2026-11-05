@@ -14,6 +14,7 @@ the LBMA gold price fix starts (defaults in docs/RISK_POLICY.md §1: high impact
 Everything here is pure: parsers take text, no network, no clock. All ``Event.time_utc`` values are
 aware UTC datetimes.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -40,11 +41,20 @@ LONDON = ZoneInfo("Europe/London")
 BLS_HIGH_IMPACT: tuple[str, ...] = ("employment situation", "consumer price index")
 #: Titles the BLS parser recognises (others are kept as medium with their raw title).
 BLS_KNOWN_RELEASES: tuple[str, ...] = (
-    "employment situation", "consumer price index", "producer price index", "real earnings",
-    "job openings and labor turnover", "employment cost index", "productivity and costs",
-    "import and export price indexes", "state employment and unemployment",
-    "metropolitan area employment and unemployment", "county employment and wages",
-    "employment situation of veterans", "union members", "usual weekly earnings",
+    "employment situation",
+    "consumer price index",
+    "producer price index",
+    "real earnings",
+    "job openings and labor turnover",
+    "employment cost index",
+    "productivity and costs",
+    "import and export price indexes",
+    "state employment and unemployment",
+    "metropolitan area employment and unemployment",
+    "county employment and wages",
+    "employment situation of veterans",
+    "union members",
+    "usual weekly earnings",
 )
 
 
@@ -112,6 +122,7 @@ def to_float(value: Any) -> float | None:
 
 # -- BLS iCal ------------------------------------------------------------------------------------
 
+
 def _unfold_ics(text: str) -> list[str]:
     """RFC 5545 line unfolding: a line starting with space/tab continues the previous one."""
     lines: list[str] = []
@@ -124,8 +135,13 @@ def _unfold_ics(text: str) -> list[str]:
 
 
 def _ics_unescape(value: str) -> str:
-    return (value.replace("\\n", "\n").replace("\\N", "\n").replace("\\,", ",")
-            .replace("\\;", ";").replace("\\\\", "\\")).strip()
+    return (
+        value.replace("\\n", "\n")
+        .replace("\\N", "\n")
+        .replace("\\,", ",")
+        .replace("\\;", ";")
+        .replace("\\\\", "\\")
+    ).strip()
 
 
 def _parse_ics_dt(params: dict[str, str], value: str) -> datetime | None:
@@ -197,16 +213,31 @@ def parse_bls_ics(text: str | bytes) -> list[Event]:
         title = _ics_unescape(props["SUMMARY"][1])
         uid = _ics_unescape(props["UID"][1]) if "UID" in props else ""
         event_id = f"bls:{uid}" if uid else "bls:" + _short_hash(when.isoformat(), title)
-        out.append(Event(time_utc=when, title=title, country="US", impact=bls_impact(title),
-                         source="bls", actual=None, forecast=None, previous=None,
-                         event_id=event_id))
+        out.append(
+            Event(
+                time_utc=when,
+                title=title,
+                country="US",
+                impact=bls_impact(title),
+                source="bls",
+                actual=None,
+                forecast=None,
+                previous=None,
+                event_id=event_id,
+            )
+        )
     return dedupe_events(out)
 
 
 # -- ForexFactory JSON ----------------------------------------------------------------------------
 
-_FF_IMPACT: dict[str, Impact] = {"high": "high", "medium": "medium", "low": "low",
-                                 "holiday": "holiday", "non-economic": "low"}
+_FF_IMPACT: dict[str, Impact] = {
+    "high": "high",
+    "medium": "medium",
+    "low": "low",
+    "holiday": "holiday",
+    "non-economic": "low",
+}
 
 
 def parse_forexfactory_json(text: str | bytes) -> list[Event]:
@@ -238,14 +269,24 @@ def parse_forexfactory_json(text: str | bytes) -> list[Event]:
         country = str(item.get("country", "")).strip().upper()
         impact = _FF_IMPACT.get(str(item.get("impact", "")).strip().lower(), "low")
         event_id = "ff:" + _short_hash(when.isoformat(), title, country)
-        out.append(Event(time_utc=when, title=title, country=country, impact=impact,
-                         source="forexfactory", actual=to_float(item.get("actual")),
-                         forecast=to_float(item.get("forecast")),
-                         previous=to_float(item.get("previous")), event_id=event_id))
+        out.append(
+            Event(
+                time_utc=when,
+                title=title,
+                country=country,
+                impact=impact,
+                source="forexfactory",
+                actual=to_float(item.get("actual")),
+                forecast=to_float(item.get("forecast")),
+                previous=to_float(item.get("previous")),
+                event_id=event_id,
+            )
+        )
     return dedupe_events(out)
 
 
 # -- FOMC YAML -----------------------------------------------------------------------------------
+
 
 def _as_date(value: Any) -> date:
     if isinstance(value, datetime):
@@ -287,9 +328,19 @@ def load_fomc_dates(yaml_text: str | bytes) -> list[Event]:
             local = datetime.combine(d, time(0), tzinfo=tz) + timedelta(seconds=sec)
             when = local.astimezone(UTC)
         title = "FOMC rate decision" + (f" {note}" if note else "")
-        out.append(Event(time_utc=when, title=title, country="US", impact="high", source="fomc",
-                         actual=None, forecast=None, previous=None,
-                         event_id=f"fomc:{when.date().isoformat()}"))
+        out.append(
+            Event(
+                time_utc=when,
+                title=title,
+                country="US",
+                impact="high",
+                source="fomc",
+                actual=None,
+                forecast=None,
+                previous=None,
+                event_id=f"fomc:{when.date().isoformat()}",
+            )
+        )
     return dedupe_events(out)
 
 
@@ -304,8 +355,10 @@ def load_bundled_fomc() -> list[Event]:
 
 # -- LBMA fix -------------------------------------------------------------------------------------
 
-def fix_events(date_utc: date | datetime,
-               times_london: tuple[str, ...] = ("10:30", "15:00")) -> list[Event]:
+
+def fix_events(
+    date_utc: date | datetime, times_london: tuple[str, ...] = ("10:30", "15:00")
+) -> list[Event]:
     """LBMA gold price auction starts on ``date_utc`` as UTC events with impact ``fix``.
 
     London local times (Europe/London; BST or GMT by date) are converted with zoneinfo, so
@@ -321,13 +374,24 @@ def fix_events(date_utc: date | datetime,
         local = datetime.combine(d, time(0), tzinfo=LONDON) + timedelta(seconds=sec)
         when = local.astimezone(UTC)
         label = "AM" if sec < 12 * 3600 else "PM"
-        out.append(Event(time_utc=when, title=f"LBMA gold price {label} fix ({t} London)",
-                         country="GB", impact="fix", source="lbma", actual=None, forecast=None,
-                         previous=None, event_id=f"lbma:{d.isoformat()}:{i}:{t}"))
+        out.append(
+            Event(
+                time_utc=when,
+                title=f"LBMA gold price {label} fix ({t} London)",
+                country="GB",
+                impact="fix",
+                source="lbma",
+                actual=None,
+                forecast=None,
+                previous=None,
+                event_id=f"lbma:{d.isoformat()}:{i}:{t}",
+            )
+        )
     return out
 
 
 # -- windows --------------------------------------------------------------------------------------
+
 
 class EventWindows:
     """R-006 windows: NEWS_WINDOW around high-impact events, FIX_WINDOW around fix starts."""
@@ -347,8 +411,9 @@ class EventWindows:
             out.extend(fix_events(d + timedelta(days=delta), self.cfg.fix_times_london))
         return out
 
-    def active(self, dt_utc: datetime,
-               events: list[Event] | tuple[Event, ...]) -> tuple[SessionState | None, Event | None]:
+    def active(
+        self, dt_utc: datetime, events: list[Event] | tuple[Event, ...]
+    ) -> tuple[SessionState | None, Event | None]:
         """Return ``(NEWS_WINDOW, event)`` if inside a high-impact window, ``(FIX_WINDOW, event)``
         if inside a fix window, else ``(None, None)``. Windows are inclusive at both ends; the
         nearest event wins within a class; news takes precedence over fix.

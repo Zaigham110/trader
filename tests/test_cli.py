@@ -18,12 +18,34 @@ def test_synth_backtest_sweep_round_trip(tmp_path: Path):
     bars = tmp_path / "bars.parquet"
     r = runner.invoke(app, ["synth-data", "--out", str(bars), "--days", "12", "--seed", "5"])
     assert r.exit_code == 0 and "snapshot_id=" in r.output
-    r = runner.invoke(app, ["backtest", "--data", str(bars), "--out", str(tmp_path / "rep"),
-                            "--db", str(tmp_path / "r.sqlite")])
+    r = runner.invoke(
+        app,
+        [
+            "backtest",
+            "--data",
+            str(bars),
+            "--out",
+            str(tmp_path / "rep"),
+            "--db",
+            str(tmp_path / "r.sqlite"),
+        ],
+    )
     assert r.exit_code == 0, r.output
     assert "Offline gate" in r.output and list((tmp_path / "rep").glob("*.json"))
-    r = runner.invoke(app, ["sweep", "--data", str(bars), "--grid", "stop_atr=0.8,1.2;target_atr=1.5",
-                            "--db", str(tmp_path / "r.sqlite"), "--out", str(tmp_path / "sw")])
+    r = runner.invoke(
+        app,
+        [
+            "sweep",
+            "--data",
+            str(bars),
+            "--grid",
+            "stop_atr=0.8,1.2;target_atr=1.5",
+            "--db",
+            str(tmp_path / "r.sqlite"),
+            "--out",
+            str(tmp_path / "sw"),
+        ],
+    )
     assert r.exit_code == 0, r.output
     assert "2 runs recorded" in r.output and "ledger size 3" in r.output  # 1 baseline + 2 sweep
 

@@ -1,5 +1,6 @@
 """SessionClock precedence tests (R-002, R-006): broker override, schedule, stale, buffer,
 news / fix windows, trade_only_hours."""
+
 import logging
 from datetime import UTC, datetime
 
@@ -17,8 +18,17 @@ def utc(y, mo, d, h=0, mi=0, s=0):
 
 
 def high(when, title="NFP"):
-    return Event(time_utc=when, title=title, country="US", impact="high", source="t",
-                 actual=None, forecast=None, previous=None, event_id=f"t:{title}")
+    return Event(
+        time_utc=when,
+        title=title,
+        country="US",
+        impact="high",
+        source="t",
+        actual=None,
+        forecast=None,
+        previous=None,
+        event_id=f"t:{title}",
+    )
 
 
 # Wed 2026-01-14 (winter) is the reference day. Open 00:00-21:58, break 21:58-23:00:30,
@@ -56,6 +66,7 @@ def test_naive_rejected(clock):
 
 
 # -- broker precedence ----------------------------------------------------------------------------
+
 
 def test_broker_disabled_overrides_open_schedule(clock, caplog):
     with caplog.at_level(logging.WARNING, logger="goldtrader.session.state"):
@@ -106,11 +117,12 @@ def test_unknown_trade_mode_fails_closed(clock):
 
 # -- stale / buffer -------------------------------------------------------------------------------
 
+
 def test_stale_ticks(clock):
     d = clock.state_at(WED_OPEN, trade_mode=K.SYMBOL_TRADE_MODE_FULL, last_tick_age_s=10.5)
     assert d.state is S.STALE and d.reason.startswith("stale_ticks:")
     assert not d.entries_allowed
-    d = clock.state_at(WED_OPEN, last_tick_age_s=10.0)   # equal to threshold is fresh
+    d = clock.state_at(WED_OPEN, last_tick_age_s=10.0)  # equal to threshold is fresh
     assert d.state is S.OPEN
 
 
@@ -120,10 +132,10 @@ def test_stale_not_reported_when_schedule_closed(clock):
 
 
 def test_pre_break_buffer(clock):
-    d = clock.state_at(utc(2026, 1, 14, 21, 44))          # 14 min to the 21:58 break
+    d = clock.state_at(utc(2026, 1, 14, 21, 44))  # 14 min to the 21:58 break
     assert d.state is S.PRE_BREAK_BUFFER and d.reason == "pre_break_buffer:840s"
     assert d.seconds_to_close == 840 and not d.entries_allowed
-    d = clock.state_at(utc(2026, 1, 14, 21, 43))          # exactly 15 min → inside (<=)
+    d = clock.state_at(utc(2026, 1, 14, 21, 43))  # exactly 15 min → inside (<=)
     assert d.state is S.PRE_BREAK_BUFFER
     d = clock.state_at(utc(2026, 1, 14, 21, 42, 59))
     assert d.state is S.OPEN
@@ -141,6 +153,7 @@ def test_stale_beats_buffer(clock):
 
 
 # -- event windows --------------------------------------------------------------------------------
+
 
 def test_news_window(clock):
     nfp = high(utc(2026, 1, 14, 13, 30))
@@ -181,6 +194,7 @@ def test_closed_beats_news(clock):
 
 # -- trade_only_hours -----------------------------------------------------------------------------
 
+
 def test_trade_only_hours():
     c = SessionClock(SessionConfig(trade_only_hours_utc=(7, 17)))
     d = c.state_at(utc(2026, 1, 14, 6, 59))
@@ -193,8 +207,10 @@ def test_trade_only_hours():
     assert d.state is S.OPEN and not d.entries_allowed
     # restriction does not mask stronger states
     assert c.state_at(utc(2026, 1, 14, 3, 0), last_tick_age_s=99).state is S.STALE
-    assert c.state_at(utc(2026, 1, 14, 18, 0), events=[high(utc(2026, 1, 14, 18, 0))]).state \
+    assert (
+        c.state_at(utc(2026, 1, 14, 18, 0), events=[high(utc(2026, 1, 14, 18, 0))]).state
         is S.NEWS_WINDOW
+    )
     d = c.state_at(utc(2026, 1, 14, 3, 0), trade_mode=K.SYMBOL_TRADE_MODE_LONGONLY)
     assert d.reason == "outside_trade_only_hours;broker_long_only" and not d.entries_allowed
 
@@ -208,11 +224,14 @@ def test_trade_only_hours_wrapping_midnight():
 
 def test_entries_allowed_only_for_plain_open(clock):
     assert clock.state_at(WED_OPEN).entries_allowed
-    for d in (clock.state_at(WED_BREAK), clock.state_at(WED_CO),
-              clock.state_at(WED_OPEN, last_tick_age_s=99),
-              clock.state_at(utc(2026, 1, 14, 21, 50)),
-              clock.state_at(utc(2026, 1, 14, 14, 59)),
-              clock.state_at(WED_OPEN, trade_mode=K.SYMBOL_TRADE_MODE_CLOSEONLY)):
+    for d in (
+        clock.state_at(WED_BREAK),
+        clock.state_at(WED_CO),
+        clock.state_at(WED_OPEN, last_tick_age_s=99),
+        clock.state_at(utc(2026, 1, 14, 21, 50)),
+        clock.state_at(utc(2026, 1, 14, 14, 59)),
+        clock.state_at(WED_OPEN, trade_mode=K.SYMBOL_TRADE_MODE_CLOSEONLY),
+    ):
         assert not d.entries_allowed
 
 
@@ -224,8 +243,10 @@ def test_dst_mode_from_config_is_honoured():
 
 
 def test_custom_windows_config():
-    cfg = SessionConfig(news_high=EventWindow(before_min=60, after_min=30),
-                        fix_window=EventWindow(before_min=1, after_min=1))
+    cfg = SessionConfig(
+        news_high=EventWindow(before_min=60, after_min=30),
+        fix_window=EventWindow(before_min=1, after_min=1),
+    )
     c = SessionClock(cfg)
     nfp = high(utc(2026, 1, 14, 13, 30))
     assert c.state_at(utc(2026, 1, 14, 12, 31), events=[nfp]).state is S.NEWS_WINDOW

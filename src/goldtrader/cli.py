@@ -3,6 +3,7 @@
 Secrets are never passed as arguments: the real MT5 login reads MT5_LOGIN / MT5_PASSWORD /
 MT5_SERVER from the environment (Windows Credential Manager support arrives in Phase 4, R-053).
 """
+
 from __future__ import annotations
 
 import json
@@ -41,6 +42,7 @@ def _client(fake: bool):
         c.set_price(4000.00, 4000.20)
         return c
     from goldtrader.mt5.real import RealMT5
+
     c = RealMT5()
     login = os.environ.get("MT5_LOGIN")
     password = os.environ.get("MT5_PASSWORD")
@@ -65,12 +67,32 @@ def _default_spec(symbol: str) -> SymbolSpec:
     """Spec used for backtests when no live spec is stored: Exness-published XAUUSD values
     (contract 100, pip 0.01, 0.01–200 lots) plus Assumptions for the unpublished fields (KU-001)."""
     return SymbolSpec(
-        name=symbol, digits=2, point=0.01, trade_tick_size=0.01, trade_tick_value=1.0,
-        trade_contract_size=100.0, volume_min=0.01, volume_max=200.0, volume_step=0.01,
-        volume_limit=0.0, trade_stops_level=0, trade_freeze_level=0, trade_mode=4, trade_exemode=2,
-        filling_mode=3, swap_mode=1, swap_long=0.0, swap_short=0.0, swap_rollover3days=3,
-        margin_initial=0.0, margin_hedged=0.0, currency_base="XAU", currency_profit="USD",
-        currency_margin="USD", spread=20, spread_float=True,
+        name=symbol,
+        digits=2,
+        point=0.01,
+        trade_tick_size=0.01,
+        trade_tick_value=1.0,
+        trade_contract_size=100.0,
+        volume_min=0.01,
+        volume_max=200.0,
+        volume_step=0.01,
+        volume_limit=0.0,
+        trade_stops_level=0,
+        trade_freeze_level=0,
+        trade_mode=4,
+        trade_exemode=2,
+        filling_mode=3,
+        swap_mode=1,
+        swap_long=0.0,
+        swap_short=0.0,
+        swap_rollover3days=3,
+        margin_initial=0.0,
+        margin_hedged=0.0,
+        currency_base="XAU",
+        currency_profit="USD",
+        currency_margin="USD",
+        spread=20,
+        spread_float=True,
     )
 
 
@@ -78,9 +100,18 @@ def _default_spec(symbol: str) -> SymbolSpec:
 def config_check(config: Path = typer.Argument(..., exists=True)) -> None:
     """Validate a config file and print its hashes."""
     cfg = _load(config)
-    typer.echo(json.dumps({"config_hash": config_hash(cfg), "owner_hash": owner_hash(cfg),
-                           "profile": cfg.owner.profile, "mode": cfg.owner.mode,
-                           "symbol": cfg.account.symbol}, indent=2))
+    typer.echo(
+        json.dumps(
+            {
+                "config_hash": config_hash(cfg),
+                "owner_hash": owner_hash(cfg),
+                "profile": cfg.owner.profile,
+                "mode": cfg.owner.mode,
+                "symbol": cfg.account.symbol,
+            },
+            indent=2,
+        )
+    )
 
 
 @app.command("db-init")
@@ -92,8 +123,12 @@ def db_init(db: Path = typer.Option(Path("state/demo.sqlite"))) -> None:
 
 
 @app.command("synth-data")
-def synth_data(out: Path = typer.Option(Path("data/bars/synthetic_1m.parquet")),
-               days: float = 60, seed: int = 42, start: str = "2026-01-05") -> None:
+def synth_data(
+    out: Path = typer.Option(Path("data/bars/synthetic_1m.parquet")),
+    days: float = 60,
+    seed: int = 42,
+    start: str = "2026-01-05",
+) -> None:
     """Generate deterministic synthetic 1-minute gold bars for development and tests."""
     start_dt = datetime.fromisoformat(start).replace(tzinfo=UTC)
     df = generate_bars(start_dt, days, seed=seed, seconds=60)
@@ -102,9 +137,11 @@ def synth_data(out: Path = typer.Option(Path("data/bars/synthetic_1m.parquet")),
 
 
 @app.command("import-ticks")
-def import_ticks(csv: Path = typer.Argument(..., exists=True),
-                 out: Path = typer.Option(Path("data/bars/exness_1m.parquet")),
-                 seconds: int = 60) -> None:
+def import_ticks(
+    csv: Path = typer.Argument(..., exists=True),
+    out: Path = typer.Option(Path("data/bars/exness_1m.parquet")),
+    seconds: int = 60,
+) -> None:
     """Convert an Exness Personal-Area tick CSV (Exness,Symbol,Timestamp,Bid,Ask) into bars."""
     ticks = read_exness_ticks(csv)
     df = bars_from_arrays(TickArrays.from_ticks(ticks), seconds)
@@ -118,11 +155,16 @@ def _prepare(data: Path):
 
 
 @app.command("backtest")
-def backtest(config: Path = typer.Option(Path("config/demo.yaml")),
-             data: Path = typer.Option(Path("data/bars/synthetic_1m.parquet")),
-             strategy_id: str | None = None, equity: float = 5000.0, spread_mult: float = 1.0,
-             slippage_points: float = 1.0, out: Path = typer.Option(Path("reports/backtests")),
-             db: Path | None = None) -> None:
+def backtest(
+    config: Path = typer.Option(Path("config/demo.yaml")),
+    data: Path = typer.Option(Path("data/bars/synthetic_1m.parquet")),
+    strategy_id: str | None = None,
+    equity: float = 5000.0,
+    spread_mult: float = 1.0,
+    slippage_points: float = 1.0,
+    out: Path = typer.Option(Path("reports/backtests")),
+    db: Path | None = None,
+) -> None:
     """Run one strategy from the config over a bars file; write metrics and a gate report."""
     cfg = _load(config)
     strategies = [s for s in cfg.strategies if strategy_id is None or s.id == strategy_id]
@@ -132,8 +174,11 @@ def backtest(config: Path = typer.Option(Path("config/demo.yaml")),
     s = strategies[0]
     df, snap = _prepare(data)
     spec = _default_spec(cfg.account.symbol)
-    cost = CostModel(spread_multiplier=spread_mult, slippage_points=slippage_points,
-                     commission_per_lot_per_side_usd=cfg.account.commission_per_lot_per_side_usd)
+    cost = CostModel(
+        spread_multiplier=spread_mult,
+        slippage_points=slippage_points,
+        commission_per_lot_per_side_usd=cfg.account.commission_per_lot_per_side_usd,
+    )
     strat = build_strategy(s.kind, s.id, s.params)
     res = run_backtest(df, strat, cfg, spec, cost=cost, equity0=equity)
     m = compute_metrics(res, equity)
@@ -144,38 +189,71 @@ def backtest(config: Path = typer.Option(Path("config/demo.yaml")),
         repo = Repo(conn)
         bid = bundle_id(s.id, s.kind, s.params, config_hash(cfg))
         repo.record_bundle(bid, s.id, s.kind, s.params, config_hash(cfg))
-        repo.record_data_snapshot(snap, f"bars {data}", cfg.account.symbol, 60,
-                                  int(df["time"].iloc[0]), int(df["time"].iloc[-1]), len(df))
-        repo.append_trial(bundle_id=bid, change_type="baseline", description=f"backtest {s.id}",
-                          data_snapshot_id=snap, cost_model_json=cost.as_dict(),
-                          n_trades=m["n_trades"], n_days=m["n_days"], sharpe=m.get("sharpe"),
-                          net_return_pct=m.get("net_return_pct"),
-                          max_drawdown_pct=m.get("max_drawdown_pct"), created_by="owner",
-                          status="recorded")
+        repo.record_data_snapshot(
+            snap,
+            f"bars {data}",
+            cfg.account.symbol,
+            60,
+            int(df["time"].iloc[0]),
+            int(df["time"].iloc[-1]),
+            len(df),
+        )
+        repo.append_trial(
+            bundle_id=bid,
+            change_type="baseline",
+            description=f"backtest {s.id}",
+            data_snapshot_id=snap,
+            cost_model_json=cost.as_dict(),
+            n_trades=m["n_trades"],
+            n_days=m["n_days"],
+            sharpe=m.get("sharpe"),
+            net_return_pct=m.get("net_return_pct"),
+            max_drawdown_pct=m.get("max_drawdown_pct"),
+            created_by="owner",
+            status="recorded",
+        )
         ledger = repo.trial_sharpes()
-    rep = offline_gate(res, m, df, thresholds=GateThresholds(spread_multiplier=spread_mult),
-                       ledger_sharpes=ledger, rng=np.random.default_rng(0))
+    rep = offline_gate(
+        res,
+        m,
+        df,
+        thresholds=GateThresholds(spread_multiplier=spread_mult),
+        ledger_sharpes=ledger,
+        rng=np.random.default_rng(0),
+    )
     out.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     base = out / f"{s.id}_{stamp}"
     res.trades.to_csv(base.with_suffix(".trades.csv"), index=False)
-    (base.with_suffix(".json")).write_text(json.dumps({"metrics": m, "gate": rep.as_dict(),
-                                                       "snapshot_id": snap,
-                                                       "config_hash": config_hash(cfg)},
-                                                      indent=2, default=str))
+    (base.with_suffix(".json")).write_text(
+        json.dumps(
+            {
+                "metrics": m,
+                "gate": rep.as_dict(),
+                "snapshot_id": snap,
+                "config_hash": config_hash(cfg),
+            },
+            indent=2,
+            default=str,
+        )
+    )
     (base.with_suffix(".md")).write_text(render_report(rep, s.id))
     typer.echo(render_report(rep, s.id))
     typer.echo(f"reports: {base}.json / .md / .trades.csv")
 
 
 @app.command("sweep")
-def sweep_cmd(config: Path = typer.Option(Path("config/demo.yaml")),
-              data: Path = typer.Option(Path("data/bars/synthetic_1m.parquet")),
-              kind: str = "trend_atr", strategy_id: str = "sweep",
-              grid: str = typer.Option("stop_atr=0.6,1.0,1.4;target_atr=1.0,1.5,2.0"),
-              equity: float = 5000.0, spread_mult: float = 1.5,
-              db: Path = typer.Option(Path("state/research.sqlite")),
-              out: Path = typer.Option(Path("reports/sweeps"))) -> None:
+def sweep_cmd(
+    config: Path = typer.Option(Path("config/demo.yaml")),
+    data: Path = typer.Option(Path("data/bars/synthetic_1m.parquet")),
+    kind: str = "trend_atr",
+    strategy_id: str = "sweep",
+    grid: str = typer.Option("stop_atr=0.6,1.0,1.4;target_atr=1.0,1.5,2.0"),
+    equity: float = 5000.0,
+    spread_mult: float = 1.5,
+    db: Path = typer.Option(Path("state/research.sqlite")),
+    out: Path = typer.Option(Path("reports/sweeps")),
+) -> None:
     """Parameter sweep: every run goes to the trial ledger; the best run is gated incl. PBO."""
     cfg = _load(config)
     g: dict[str, list[float]] = {}
@@ -184,24 +262,52 @@ def sweep_cmd(config: Path = typer.Option(Path("config/demo.yaml")),
         g[k.strip()] = [float(v) for v in vals.split(",")]
     df, snap = _prepare(data)
     spec = _default_spec(cfg.account.symbol)
-    cost = CostModel(spread_multiplier=spread_mult,
-                     commission_per_lot_per_side_usd=cfg.account.commission_per_lot_per_side_usd)
+    cost = CostModel(
+        spread_multiplier=spread_mult,
+        commission_per_lot_per_side_usd=cfg.account.commission_per_lot_per_side_usd,
+    )
     conn = connect(db)
     migrate(conn)
     repo = Repo(conn)
-    repo.record_data_snapshot(snap, f"bars {data}", cfg.account.symbol, 60,
-                              int(df["time"].iloc[0]), int(df["time"].iloc[-1]), len(df))
-    sw = sweep(df, kind, strategy_id, g, cfg, spec, repo=repo, data_snapshot_id=snap,
-               config_hash=config_hash(cfg), cost=cost, equity0=equity)
+    repo.record_data_snapshot(
+        snap,
+        f"bars {data}",
+        cfg.account.symbol,
+        60,
+        int(df["time"].iloc[0]),
+        int(df["time"].iloc[-1]),
+        len(df),
+    )
+    sw = sweep(
+        df,
+        kind,
+        strategy_id,
+        g,
+        cfg,
+        spec,
+        repo=repo,
+        data_snapshot_id=snap,
+        config_hash=config_hash(cfg),
+        cost=cost,
+        equity0=equity,
+    )
     params, res, m = sw.runs[sw.best_index]
-    rep = offline_gate(res, m, df, thresholds=GateThresholds(spread_multiplier=spread_mult),
-                       ledger_sharpes=repo.trial_sharpes(), daily_matrix=sw.daily_matrix,
-                       rng=np.random.default_rng(0))
+    rep = offline_gate(
+        res,
+        m,
+        df,
+        thresholds=GateThresholds(spread_multiplier=spread_mult),
+        ledger_sharpes=repo.trial_sharpes(),
+        daily_matrix=sw.daily_matrix,
+        rng=np.random.default_rng(0),
+    )
     out.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     base = out / f"{kind}_{stamp}"
-    rows = [{"params": p, **{k: v for k, v in mm.items() if not isinstance(v, dict)}}
-            for p, _, mm in sw.runs]
+    rows = [
+        {"params": p, **{k: v for k, v in mm.items() if not isinstance(v, dict)}}
+        for p, _, mm in sw.runs
+    ]
     base.with_suffix(".runs.json").write_text(json.dumps(rows, indent=2, default=str))
     base.with_suffix(".md").write_text(render_report(rep, f"{kind} best {params}"))
     typer.echo(render_report(rep, f"{kind} best {params}"))
@@ -209,9 +315,13 @@ def sweep_cmd(config: Path = typer.Option(Path("config/demo.yaml")),
 
 
 @app.command("mt5-tests")
-def mt5_tests(fake: bool = typer.Option(True, "--fake/--real"), symbol: str | None = None,
-              trade: bool = typer.Option(False, "--trade/--no-trade"),
-              allow_real: bool = False, out: Path | None = None) -> None:
+def mt5_tests(
+    fake: bool = typer.Option(True, "--fake/--real"),
+    symbol: str | None = None,
+    trade: bool = typer.Option(False, "--trade/--no-trade"),
+    allow_real: bool = False,
+    out: Path | None = None,
+) -> None:
     """Run the MT5-T00…T16 on-account suite (docs/MT5_EXNESS_INTEGRATION.md §8)."""
     client = _client(fake)
     try:
@@ -229,8 +339,11 @@ def mt5_tests(fake: bool = typer.Option(True, "--fake/--real"), symbol: str | No
 
 
 @app.command("spec-dump")
-def spec_dump(fake: bool = typer.Option(True, "--fake/--real"), symbol: str | None = None,
-              db: Path | None = None) -> None:
+def spec_dump(
+    fake: bool = typer.Option(True, "--fake/--real"),
+    symbol: str | None = None,
+    db: Path | None = None,
+) -> None:
     """Read symbol_info() and account_info(); store them when --db is given (R-001, KU-001)."""
     client = _client(fake)
     try:
@@ -239,20 +352,35 @@ def spec_dump(fake: bool = typer.Option(True, "--fake/--real"), symbol: str | No
         acct = client.account_info()
     finally:
         client.shutdown()
-    d = {k: v for k, v in spec.__dict__.items() if k != "CRITICAL"} if hasattr(spec, "__dict__") else {}
+    d = (
+        {k: v for k, v in spec.__dict__.items() if k != "CRITICAL"}
+        if hasattr(spec, "__dict__")
+        else {}
+    )
     if not d:
         from dataclasses import asdict
+
         d = asdict(spec)
         d.pop("CRITICAL", None)
-    typer.echo(json.dumps({"spec": d, "account": acct.__dict__ if acct and hasattr(acct, "__dict__")
-                           else (acct._asdict() if acct and hasattr(acct, "_asdict") else str(acct))},
-                          indent=2, default=str))
+    typer.echo(
+        json.dumps(
+            {
+                "spec": d,
+                "account": acct.__dict__
+                if acct and hasattr(acct, "__dict__")
+                else (acct._asdict() if acct and hasattr(acct, "_asdict") else str(acct)),
+            },
+            indent=2,
+            default=str,
+        )
+    )
     if db is not None:
         conn = connect(db)
         migrate(conn)
         repo = Repo(conn)
         prev = repo.latest_spec(sym)
         from goldtrader.mt5.spec import critical_changes, diff_specs
+
         changed = diff_specs(prev, spec) if prev else []
         crit = critical_changes(prev, spec) if prev else []
         repo.record_spec(spec, changed, bool(crit))

@@ -1,4 +1,5 @@
 """Exness tick CSV loader: timestamp formats, malformed rows, crossed quotes, containers."""
+
 from __future__ import annotations
 
 import gzip
@@ -29,19 +30,21 @@ def _write(path: Path, body: str, header: str = HEADER) -> Path:
 
 def test_timestamp_formats_all_map_to_the_same_millisecond():
     base = "2025-11-04 00:20:00"
-    variants = pd.Series([
-        base,                                   # space separator, no fraction
-        base + ".000",                          # fractional seconds
-        "2025-11-04T00:20:00",                  # ISO with T
-        "2025-11-04T00:20:00Z",                 # ISO with Z
-        "2025-11-04T00:20:00.000Z",             # ISO with fraction and Z
-        "2025-11-04T02:20:00+02:00",            # aware, converted to UTC
-        "2025.11.04 00:20:00",                  # MT4/MT5 dotted date
-        str(T0_MS),                             # epoch milliseconds
-        str(T0_MS // 1000),                     # epoch seconds
-        str(T0_MS * 1000),                      # epoch microseconds
-        f"{T0_MS / 1000:.3f}",                  # fractional epoch seconds
-    ])
+    variants = pd.Series(
+        [
+            base,  # space separator, no fraction
+            base + ".000",  # fractional seconds
+            "2025-11-04T00:20:00",  # ISO with T
+            "2025-11-04T00:20:00Z",  # ISO with Z
+            "2025-11-04T00:20:00.000Z",  # ISO with fraction and Z
+            "2025-11-04T02:20:00+02:00",  # aware, converted to UTC
+            "2025.11.04 00:20:00",  # MT4/MT5 dotted date
+            str(T0_MS),  # epoch milliseconds
+            str(T0_MS // 1000),  # epoch seconds
+            str(T0_MS * 1000),  # epoch microseconds
+            f"{T0_MS / 1000:.3f}",  # fractional epoch seconds
+        ]
+    )
     out = parse_timestamps(variants)
     assert np.all(out == T0_MS), out
 
@@ -57,11 +60,14 @@ def test_unparseable_timestamps_become_nan():
 
 
 def test_reads_exness_layout_sorted_and_typed(tmp_path: Path):
-    p = _write(tmp_path / "XAUUSDm_2025_11_04.csv", (
-        '"Exness","XAUUSDm","2025-11-04 00:20:01.000","4001.10","4001.30"\n'
-        '"Exness","XAUUSDm","2025-11-04 00:20:00.500","4001.00","4001.20"\n'
-        '"Exness","XAUUSDm","2025-11-04 00:20:00.000","4000.90","4001.10"\n'
-    ))
+    p = _write(
+        tmp_path / "XAUUSDm_2025_11_04.csv",
+        (
+            '"Exness","XAUUSDm","2025-11-04 00:20:01.000","4001.10","4001.30"\n'
+            '"Exness","XAUUSDm","2025-11-04 00:20:00.500","4001.00","4001.20"\n'
+            '"Exness","XAUUSDm","2025-11-04 00:20:00.000","4000.90","4001.10"\n'
+        ),
+    )
     ticks = read_exness_ticks(p)
     assert [t.time_msc for t in ticks] == [T0_MS, T0_MS + 500, T0_MS + 1000]
     assert ticks[0] == Tick(time_msc=T0_MS, bid=4000.90, ask=4001.10)
@@ -73,17 +79,20 @@ def test_reads_exness_layout_sorted_and_typed(tmp_path: Path):
 
 
 def test_malformed_rows_are_skipped_and_counted(tmp_path: Path):
-    p = _write(tmp_path / "bad.csv", (
-        'Exness,XAUUSDm,2025-11-04 00:20:00,4000.90,4001.10\n'
-        'Exness,XAUUSDm,garbage,4000.90,4001.10\n'          # bad timestamp
-        'Exness,XAUUSDm,2025-11-04 00:20:02,abc,4001.10\n'   # non-numeric bid
-        'Exness,XAUUSDm,2025-11-04 00:20:03,4000.90\n'       # missing field
-        'Exness,XAUUSDm,2025-11-04 00:20:04,4000.90,4001.10,extra,fields\n'  # too many fields
-        '\n'                                                  # blank line (ignored, not counted)
-        'Exness,XAUUSDm,2025-11-04 00:20:05,0,4001.10\n'     # non-positive price
-        'Exness,XAUUSDm,2025-11-04 00:20:06,4000.90,\n'      # empty ask
-        'Exness,XAUUSDm,2025-11-04 00:20:07,4000.95,4001.15\n'
-    ))
+    p = _write(
+        tmp_path / "bad.csv",
+        (
+            "Exness,XAUUSDm,2025-11-04 00:20:00,4000.90,4001.10\n"
+            "Exness,XAUUSDm,garbage,4000.90,4001.10\n"  # bad timestamp
+            "Exness,XAUUSDm,2025-11-04 00:20:02,abc,4001.10\n"  # non-numeric bid
+            "Exness,XAUUSDm,2025-11-04 00:20:03,4000.90\n"  # missing field
+            "Exness,XAUUSDm,2025-11-04 00:20:04,4000.90,4001.10,extra,fields\n"  # too many fields
+            "\n"  # blank line (ignored, not counted)
+            "Exness,XAUUSDm,2025-11-04 00:20:05,0,4001.10\n"  # non-positive price
+            "Exness,XAUUSDm,2025-11-04 00:20:06,4000.90,\n"  # empty ask
+            "Exness,XAUUSDm,2025-11-04 00:20:07,4000.95,4001.15\n"
+        ),
+    )
     rep = load_exness_ticks(p)
     assert rep.kept == 2
     assert rep.rows_total == 8
@@ -92,41 +101,51 @@ def test_malformed_rows_are_skipped_and_counted(tmp_path: Path):
 
 
 def test_crossed_quotes_are_dropped_and_counted(tmp_path: Path):
-    p = _write(tmp_path / "crossed.csv", (
-        'Exness,XAUUSDm,2025-11-04 00:20:00,4000.90,4001.10\n'
-        'Exness,XAUUSDm,2025-11-04 00:20:01,4001.50,4001.10\n'   # bid > ask
-        'Exness,XAUUSDm,2025-11-04 00:20:02,4001.10,4001.10\n'   # bid == ask is allowed
-    ))
+    p = _write(
+        tmp_path / "crossed.csv",
+        (
+            "Exness,XAUUSDm,2025-11-04 00:20:00,4000.90,4001.10\n"
+            "Exness,XAUUSDm,2025-11-04 00:20:01,4001.50,4001.10\n"  # bid > ask
+            "Exness,XAUUSDm,2025-11-04 00:20:02,4001.10,4001.10\n"  # bid == ask is allowed
+        ),
+    )
     rep = load_exness_ticks(p)
     assert rep.crossed == 1 and rep.kept == 2
     assert all(t.bid <= t.ask for t in rep.ticks)
 
 
 def test_exact_duplicates_removed_but_same_ms_different_quotes_kept(tmp_path: Path):
-    p = _write(tmp_path / "dups.csv", (
-        'Exness,XAUUSDm,2025-11-04 00:20:00.000,4000.90,4001.10\n'
-        'Exness,XAUUSDm,2025-11-04 00:20:00.000,4000.90,4001.10\n'   # exact duplicate
-        'Exness,XAUUSDm,2025-11-04 00:20:00.000,4000.95,4001.15\n'   # same ms, new quote
-    ))
+    p = _write(
+        tmp_path / "dups.csv",
+        (
+            "Exness,XAUUSDm,2025-11-04 00:20:00.000,4000.90,4001.10\n"
+            "Exness,XAUUSDm,2025-11-04 00:20:00.000,4000.90,4001.10\n"  # exact duplicate
+            "Exness,XAUUSDm,2025-11-04 00:20:00.000,4000.95,4001.15\n"  # same ms, new quote
+        ),
+    )
     rep = load_exness_ticks(p)
     assert rep.duplicates == 1 and rep.kept == 2
     assert [t.bid for t in rep.ticks] == [4000.90, 4000.95]  # stable order preserved
 
 
 def test_headerless_and_three_column_files(tmp_path: Path):
-    five = _write(tmp_path / "h5.csv", 'Exness,XAUUSDm,2025-11-04 00:20:00,4000.90,4001.10\n',
-                  header="")
-    three = _write(tmp_path / "h3.csv", '2025-11-04 00:20:00,4000.90,4001.10\n', header="")
-    assert read_exness_ticks(five) == read_exness_ticks(three) == [
-        Tick(time_msc=T0_MS, bid=4000.90, ask=4001.10)]
+    five = _write(
+        tmp_path / "h5.csv", "Exness,XAUUSDm,2025-11-04 00:20:00,4000.90,4001.10\n", header=""
+    )
+    three = _write(tmp_path / "h3.csv", "2025-11-04 00:20:00,4000.90,4001.10\n", header="")
+    assert (
+        read_exness_ticks(five)
+        == read_exness_ticks(three)
+        == [Tick(time_msc=T0_MS, bid=4000.90, ask=4001.10)]
+    )
 
 
 def test_zip_and_gzip_containers(tmp_path: Path):
     body = HEADER + (
-        'Exness,XAUUSDm,2025-11-04 00:20:00,4000.90,4001.10\n'
-        'Exness,XAUUSDm,2025-11-04 00:20:01,4000.95,4001.15\n'
+        "Exness,XAUUSDm,2025-11-04 00:20:00,4000.90,4001.10\n"
+        "Exness,XAUUSDm,2025-11-04 00:20:01,4000.95,4001.15\n"
     )
-    body2 = HEADER + 'Exness,XAUUSDm,2025-11-04 00:20:02,4001.00,4001.20\n'
+    body2 = HEADER + "Exness,XAUUSDm,2025-11-04 00:20:02,4001.00,4001.20\n"
     gz = tmp_path / "ticks.csv.gz"
     with gzip.open(gz, "wt", encoding="utf-8") as fh:
         fh.write(body)
@@ -160,8 +179,10 @@ def test_empty_and_missing_files(tmp_path: Path):
 
 
 def test_ticks_to_frame_and_back():
-    ticks = [Tick(time_msc=T0_MS, bid=4000.9, ask=4001.1),
-             Tick(time_msc=T0_MS + 1, bid=4000.8, ask=4001.0)]
+    ticks = [
+        Tick(time_msc=T0_MS, bid=4000.9, ask=4001.1),
+        Tick(time_msc=T0_MS + 1, bid=4000.8, ask=4001.0),
+    ]
     df = ticks_to_frame(ticks)
     assert list(df.columns) == ["time_msc", "bid", "ask", "spread"]
     assert df["time_msc"].dtype == "int64"

@@ -1,4 +1,5 @@
 """Synthetic gold ticks: schedule gaps, spread by hour, determinism, sanity and speed."""
+
 from __future__ import annotations
 
 import time
@@ -52,20 +53,21 @@ def test_no_ticks_in_daily_break_or_weekend(week_arrays):
     assert ((weekday == 6) & (sod == SUNDAY_OPEN_S)).any()
     # one tick per second while open, strictly increasing times
     assert (np.diff(week_arrays.time_msc) > 0).all()
-    expected_open = open_mask_winter(np.arange(int(MONDAY.timestamp()),
-                                               int(MONDAY.timestamp()) + 8 * 86400)).sum()
+    expected_open = open_mask_winter(
+        np.arange(int(MONDAY.timestamp()), int(MONDAY.timestamp()) + 8 * 86400)
+    ).sum()
     assert len(week_arrays) == expected_open
 
 
 def test_scalar_schedule_matches_the_mask():
     assert is_open_winter(MONDAY + timedelta(hours=10))
-    assert not is_open_winter(MONDAY + timedelta(hours=22))                  # daily break
+    assert not is_open_winter(MONDAY + timedelta(hours=22))  # daily break
     assert is_open_winter(MONDAY + timedelta(hours=23, minutes=2))
-    assert not is_open_winter(MONDAY + timedelta(days=5, hours=12))          # Saturday
+    assert not is_open_winter(MONDAY + timedelta(days=5, hours=12))  # Saturday
     assert not is_open_winter(MONDAY + timedelta(days=6, hours=23, minutes=4))
-    assert is_open_winter(MONDAY + timedelta(days=6, hours=23, minutes=5))   # Sunday open
+    assert is_open_winter(MONDAY + timedelta(days=6, hours=23, minutes=5))  # Sunday open
     assert not is_open_winter(MONDAY + timedelta(days=4, hours=21, minutes=58))  # Friday close
-    assert is_open_winter(datetime(2026, 1, 5, 10, 0))   # naive datetimes are UTC
+    assert is_open_winter(datetime(2026, 1, 5, 10, 0))  # naive datetimes are UTC
 
 
 def test_schedule_override_callable():
@@ -83,7 +85,7 @@ def test_quotes_are_sane(week_arrays):
     assert (bid > 0).all() and (ask >= bid).all()
     assert np.allclose(bid, np.round(bid, 2)) and np.allclose(ask, np.round(ask, 2))
     mid = (bid + ask) / 2
-    assert 2500 < mid.min() and mid.max() < 6500        # no blow-up over a week at 2026 vol
+    assert 2500 < mid.min() and mid.max() < 6500  # no blow-up over a week at 2026 vol
     assert abs(mid[0] - 4000.0) < 1.0
 
 
@@ -100,7 +102,7 @@ def test_spread_pattern_by_utc_hour(week_arrays):
     after_reopen = (sod >= REOPEN_S) & (sod < REOPEN_S + 300) & (((t // 86400) + 3) % 7 != 6)
     assert np.median(spread_pips[after_reopen]) >= 60
     assert spread_pips[after_reopen].min() >= 60
-    later = (sod >= REOPEN_S + 600)
+    later = sod >= REOPEN_S + 600
     assert np.median(spread_pips[later]) < 40
     assert spread_pips.min() >= 1
 

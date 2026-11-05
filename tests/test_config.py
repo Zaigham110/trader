@@ -19,8 +19,14 @@ def test_ceiling_violation_is_rejected():
 
 def test_micro_live_cannot_exceed_one_hundredth_lot():
     with pytest.raises(ConfigError):
-        parse_config({"owner": {"profile": "micro_live", "risk": {"max_volume_lots": 0.02,
-                                                                   "risk_per_trade_pct": 10}}})
+        parse_config(
+            {
+                "owner": {
+                    "profile": "micro_live",
+                    "risk": {"max_volume_lots": 0.02, "risk_per_trade_pct": 10},
+                }
+            }
+        )
 
 
 def test_prohibited_logic_is_rejected():

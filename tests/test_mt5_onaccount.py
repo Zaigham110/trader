@@ -1,4 +1,5 @@
 """The on-account suite (MT5-T00 … T16) must run end to end against FakeMT5 in CI (D-028)."""
+
 from __future__ import annotations
 
 from datetime import UTC, datetime
@@ -40,8 +41,15 @@ def by_id(results: list[TestResult]) -> dict[str, TestResult]:
 def test_suite_runs_fully_against_fake_and_all_trading_tests_pass():
     fake = make_fake()
     now = datetime.fromtimestamp(fake.tick.time_msc / 1000, UTC)
-    results = run_suite(fake, SYMBOL, allow_trading=True, now=now, n_slippage=5, n_latency=5,
-                        commission_per_lot_per_side=0.0)
+    results = run_suite(
+        fake,
+        SYMBOL,
+        allow_trading=True,
+        now=now,
+        n_slippage=5,
+        n_latency=5,
+        commission_per_lot_per_side=0.0,
+    )
     r = by_id(results)
     assert len(results) == 17 and sorted(r) == [f"MT5-T{i:02d}" for i in range(17)]
     for tid in TRADING_TESTS:
@@ -55,8 +63,12 @@ def test_suite_runs_fully_against_fake_and_all_trading_tests_pass():
     # everything the suite opened is closed again; the ledger shows only 0.01/0.02-lot deals
     assert fake.positions_get() == [] and fake.orders_get() == []
     assert all(d.volume <= 0.02 for d in fake.deals)
-    entries = [req for req in fake.requests if req.action == K.TRADE_ACTION_DEAL and not req.position]
-    assert entries and all(req.volume <= 0.02 for req in entries)  # T07's over-close is 0.05 (10038)
+    entries = [
+        req for req in fake.requests if req.action == K.TRADE_ACTION_DEAL and not req.position
+    ]
+    assert entries and all(
+        req.volume <= 0.02 for req in entries
+    )  # T07's over-close is 0.05 (10038)
     # a few concrete observations
     assert r["MT5-T04"].details["observed"] == {"FOK": 10009, "IOC": 10009, "RETURN": 10030}
     assert r["MT5-T06"].details["inside_spread_retcode"] == K.TRADE_RETCODE_INVALID_STOPS
@@ -101,8 +113,9 @@ def test_real_account_runs_with_allow_real():
     fake = make_fake()
     fake.set_account(trade_mode=K.ACCOUNT_TRADE_MODE_REAL)
     now = datetime.fromtimestamp(fake.tick.time_msc / 1000, UTC)
-    results = run_suite(fake, SYMBOL, allow_trading=True, allow_real=True, now=now,
-                        n_slippage=1, n_latency=1)
+    results = run_suite(
+        fake, SYMBOL, allow_trading=True, allow_real=True, now=now, n_slippage=1, n_latency=1
+    )
     r = by_id(results)
     assert all(r[f"MT5-{t}"].status == "pass" for t in TRADING_TESTS)
     assert fake.positions_get() == []
@@ -155,12 +168,30 @@ def test_t06_and_t07_clean_up_after_themselves_even_on_failure():
 
 def test_cleanup_closes_only_suite_positions_and_orders():
     fake = make_fake()
-    fake.order_send(OrderRequest(action=K.TRADE_ACTION_DEAL, symbol=SYMBOL, volume=0.01,
-                                 type=K.ORDER_TYPE_BUY, magic=1))  # someone else's position
-    fake.order_send(OrderRequest(action=K.TRADE_ACTION_DEAL, symbol=SYMBOL, volume=0.01,
-                                 type=K.ORDER_TYPE_SELL, magic=SUITE_MAGIC))
-    fake.order_send(OrderRequest(action=K.TRADE_ACTION_PENDING, symbol=SYMBOL, volume=0.01,
-                                 type=K.ORDER_TYPE_SELL_LIMIT, price=4100.0, magic=SUITE_MAGIC))
+    fake.order_send(
+        OrderRequest(
+            action=K.TRADE_ACTION_DEAL, symbol=SYMBOL, volume=0.01, type=K.ORDER_TYPE_BUY, magic=1
+        )
+    )  # someone else's position
+    fake.order_send(
+        OrderRequest(
+            action=K.TRADE_ACTION_DEAL,
+            symbol=SYMBOL,
+            volume=0.01,
+            type=K.ORDER_TYPE_SELL,
+            magic=SUITE_MAGIC,
+        )
+    )
+    fake.order_send(
+        OrderRequest(
+            action=K.TRADE_ACTION_PENDING,
+            symbol=SYMBOL,
+            volume=0.01,
+            type=K.ORDER_TYPE_SELL_LIMIT,
+            price=4100.0,
+            magic=SUITE_MAGIC,
+        )
+    )
     summary = cleanup(fake, SYMBOL)
     assert len(summary["closed"]) == 1 and len(summary["removed"]) == 1 and not summary["failed"]
     left = fake.positions_get()

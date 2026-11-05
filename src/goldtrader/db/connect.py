@@ -1,4 +1,5 @@
 """SQLite connection and forward-only migrations (D-024)."""
+
 from __future__ import annotations
 
 import sqlite3
@@ -55,7 +56,8 @@ def migrate(conn: sqlite3.Connection) -> int:
             continue
         with conn:
             conn.executescript(sql)
-            conn.execute("INSERT INTO schema_version(version, applied_ms) VALUES (?, ?)",
-                         (version, now_ms()))
+            conn.execute(
+                "INSERT INTO schema_version(version, applied_ms) VALUES (?, ?)", (version, now_ms())
+            )
         have = version
     return have

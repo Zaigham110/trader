@@ -1,4 +1,5 @@
 """Calendar tests (R-006): BLS iCal, ForexFactory JSON, FOMC YAML, LBMA fix times, windows."""
+
 from datetime import UTC, date, datetime, timedelta
 
 import pytest
@@ -24,8 +25,14 @@ def utc(y, mo, d, h=0, mi=0, s=0):
 
 
 def ev(when, title="x", impact="high", **kw):
-    base = {"country": "US", "source": "t", "actual": None, "forecast": None, "previous": None,
-            "event_id": f"t:{title}:{when.isoformat()}"}
+    base = {
+        "country": "US",
+        "source": "t",
+        "actual": None,
+        "forecast": None,
+        "previous": None,
+        "event_id": f"t:{title}:{when.isoformat()}",
+    }
     base.update(kw)
     return Event(time_utc=when, title=title, impact=impact, **base)
 
@@ -77,17 +84,18 @@ def test_parse_bls_ics_times_and_impact():
     events = parse_bls_ics(BLS_ICS)
     by_title = {e.title: e for e in events}
     nfp = by_title["Employment Situation for October 2026"]
-    assert nfp.time_utc == utc(2026, 11, 6, 13, 30)        # EST: 08:30 ET = 13:30 UTC
+    assert nfp.time_utc == utc(2026, 11, 6, 13, 30)  # EST: 08:30 ET = 13:30 UTC
     assert nfp.impact == "high" and nfp.country == "US" and nfp.source == "bls"
     assert nfp.event_id == "bls:bls-2026-11-06-empsit"
     assert by_title["Consumer Price Index for October 2026"].impact == "high"
     ppi = by_title["Producer Price Index for October 2026"]  # folded line reassembled
     assert ppi.impact == "medium"
     real = by_title["Real Earnings for June 2026"]
-    assert real.time_utc == utc(2026, 7, 15, 12, 30)       # EDT: 08:30 ET = 12:30 UTC
-    assert by_title["State Employment and Unemployment for October 2026"].time_utc == \
-        utc(2026, 11, 20, 13, 30)
-    assert "Thanksgiving Day (BLS closed)" not in by_title   # all-day entries skipped
+    assert real.time_utc == utc(2026, 7, 15, 12, 30)  # EDT: 08:30 ET = 12:30 UTC
+    assert by_title["State Employment and Unemployment for October 2026"].time_utc == utc(
+        2026, 11, 20, 13, 30
+    )
+    assert "Thanksgiving Day (BLS closed)" not in by_title  # all-day entries skipped
     assert events == sorted(events, key=lambda e: e.time_utc)
 
 
@@ -115,9 +123,9 @@ FF_JSON = """[
 
 def test_parse_forexfactory_json():
     events = parse_forexfactory_json(FF_JSON)
-    assert len(events) == 4                                   # duplicate NFP + no-date dropped
+    assert len(events) == 4  # duplicate NFP + no-date dropped
     nfp = next(e for e in events if e.title == "Non-Farm Employment Change")
-    assert nfp.time_utc == utc(2026, 11, 6, 13, 30)           # -05:00 → UTC
+    assert nfp.time_utc == utc(2026, 11, 6, 13, 30)  # -05:00 → UTC
     assert nfp.impact == "high" and nfp.country == "USD" and nfp.source == "forexfactory"
     assert nfp.forecast == 50_000.0 and nfp.previous == 22_000.0 and nfp.actual is None
     ur = next(e for e in events if e.title == "Unemployment Rate")
@@ -143,9 +151,9 @@ def test_load_fomc_dates_bundled_file():
     assert len(events) == 8
     assert all(e.impact == "high" and e.source == "fomc" for e in events)
     jan = events[0]
-    assert jan.time_utc == utc(2026, 1, 28, 19, 0)            # 14:00 EST
+    assert jan.time_utc == utc(2026, 1, 28, 19, 0)  # 14:00 EST
     jun = next(e for e in events if e.event_id == "fomc:2026-06-17")
-    assert jun.time_utc == utc(2026, 6, 17, 18, 0)            # 14:00 EDT
+    assert jun.time_utc == utc(2026, 6, 17, 18, 0)  # 14:00 EDT
     assert "(SEP)" in jun.title
     assert events[-1].event_id == "fomc:2026-12-09"
     assert "2027" in FOMC_YAML_PATH.read_text()
@@ -159,8 +167,11 @@ meetings:
   - 2026-09-16T18:00:00+00:00
 """
     events = load_fomc_dates(text)
-    assert [e.time_utc for e in events] == [utc(2026, 3, 18, 18, 0), utc(2026, 4, 29, 18, 30),
-                                            utc(2026, 9, 16, 18, 0)]
+    assert [e.time_utc for e in events] == [
+        utc(2026, 3, 18, 18, 0),
+        utc(2026, 4, 29, 18, 30),
+        utc(2026, 9, 16, 18, 0),
+    ]
 
 
 def test_fix_events_london_to_utc():
@@ -191,8 +202,12 @@ def test_event_requires_aware_time_and_valid_impact():
 
 @pytest.fixture
 def windows():
-    return EventWindows(SessionConfig(news_high=EventWindow(before_min=30, after_min=15),
-                                      fix_window=EventWindow(before_min=3, after_min=3)))
+    return EventWindows(
+        SessionConfig(
+            news_high=EventWindow(before_min=30, after_min=15),
+            fix_window=EventWindow(before_min=3, after_min=3),
+        )
+    )
 
 
 def test_event_windows_news(windows):

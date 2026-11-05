@@ -6,6 +6,7 @@ Two sections:
   * `owner` (risk limits, permissions, safety, profile, live mode) is owner-only, hash-checked at
     startup and before every order, and never writable by bots (D-007).
 """
+
 from __future__ import annotations
 
 from typing import Literal
@@ -22,22 +23,23 @@ class Frozen(BaseModel):
 
 
 class AccountConfig(Frozen):
-    symbol: str = "XAUUSDm"                 # Standard suffix -m (D-016); verified on account (KU-019)
+    symbol: str = "XAUUSDm"  # Standard suffix -m (D-016); verified on account (KU-019)
     environment: Literal["demo", "live"] = "demo"
     account_type: Literal["standard", "standard_cent", "pro", "raw_spread", "zero"] = "standard"
-    commission_per_lot_per_side_usd: float = 0.0   # Standard: 0; Raw 3.5; Zero 5.5 (Verified)
-    leverage_hint: int = 500                       # recommendation only; real value from account_info()
+    commission_per_lot_per_side_usd: float = 0.0  # Standard: 0; Raw 3.5; Zero 5.5 (Verified)
+    leverage_hint: int = 500  # recommendation only; real value from account_info()
 
 
 class HoursConfig(Frozen):
     """Exness XAUUSD daily schedule in server time (UTC+0). Verified 2026-11-04; shifts with US DST."""
+
     weekday_open: str = "00:00:00"
-    weekday_close: str = "21:58:00"          # winter; summer 20:58
-    close_only_start: str = "23:00:30"       # winter; summer 22:00:30
-    reopen: str = "23:02:00"                 # winter; summer 22:02
-    sunday_open: str = "23:05:00"            # winter; summer 22:05
-    friday_close: str = "21:58:00"           # winter; summer 20:58
-    summer_shift_hours: int = -1             # applied when US DST is in effect
+    weekday_close: str = "21:58:00"  # winter; summer 20:58
+    close_only_start: str = "23:00:30"  # winter; summer 22:00:30
+    reopen: str = "23:02:00"  # winter; summer 22:02
+    sunday_open: str = "23:05:00"  # winter; summer 22:05
+    friday_close: str = "21:58:00"  # winter; summer 20:58
+    summer_shift_hours: int = -1  # applied when US DST is in effect
 
 
 class EventWindow(Frozen):
@@ -53,7 +55,7 @@ class SessionConfig(Frozen):
     news_high: EventWindow = EventWindow(before_min=30, after_min=15)
     fix_window: EventWindow = EventWindow(before_min=3, after_min=3)
     fix_times_london: tuple[str, ...] = ("10:30", "15:00")
-    trade_only_hours_utc: tuple[int, int] | None = None   # e.g. (7, 17) restricts entries
+    trade_only_hours_utc: tuple[int, int] | None = None  # e.g. (7, 17) restricts entries
 
 
 class StrategyConfig(Frozen):
@@ -86,11 +88,19 @@ class LLMTier(Frozen):
 
 class LLMConfig(Frozen):
     provider: Literal["anthropic", "local", "fake"] = "anthropic"
-    tiers: dict[str, LLMTier] = Field(default_factory=lambda: {
-        "fast": LLMTier(model="claude-haiku-5-5", timeout_s=20, max_cost_usd=0.02, effort="low"),
-        "standard": LLMTier(model="claude-sonnet-5-5", timeout_s=45, max_cost_usd=0.10, effort="medium"),
-        "deep": LLMTier(model="claude-opus-5-5", timeout_s=900, max_cost_usd=5.0, effort="high"),
-    })
+    tiers: dict[str, LLMTier] = Field(
+        default_factory=lambda: {
+            "fast": LLMTier(
+                model="claude-haiku-5-5", timeout_s=20, max_cost_usd=0.02, effort="low"
+            ),
+            "standard": LLMTier(
+                model="claude-sonnet-5-5", timeout_s=45, max_cost_usd=0.10, effort="medium"
+            ),
+            "deep": LLMTier(
+                model="claude-opus-5-5", timeout_s=900, max_cost_usd=5.0, effort="high"
+            ),
+        }
+    )
     daily_budget_usd: float = 3.0
     monthly_budget_usd: float = 60.0
 
@@ -117,6 +127,7 @@ class RiskLimits(Frozen):
 
 class OwnerConfig(Frozen):
     """Owner-only section. Bots have no write path (R-010, R-034)."""
+
     profile: Profile = "normal"
     mode: Literal["shadow", "demo", "live"] = "demo"
     risk: RiskLimits = RiskLimits()
@@ -142,8 +153,10 @@ class Config(Frozen):
 
         def over(name: str, value: float, limit: float) -> None:
             if value > limit:
-                errors.append(f"owner.risk.{name}={value} exceeds ceiling {limit} for profile "
-                              f"{self.owner.profile}")
+                errors.append(
+                    f"owner.risk.{name}={value} exceeds ceiling {limit} for profile "
+                    f"{self.owner.profile}"
+                )
 
         def under(name: str, value: float, limit: float) -> None:
             if value < limit:
@@ -161,11 +174,20 @@ class Config(Frozen):
         under("owner.risk.min_reward_risk", r.min_reward_risk, c.min_reward_risk)
         under("owner.risk.cooldown_min", r.cooldown_min, c.min_cooldown_min)
         under("owner.risk.min_margin_level_pct", r.min_margin_level_pct, c.min_margin_level_pct)
-        under("session.pre_break_buffer_min", self.session.pre_break_buffer_min,
-              c.min_pre_break_buffer_min)
-        under("session.news_high.before_min", self.session.news_high.before_min, c.min_news_before_min)
+        under(
+            "session.pre_break_buffer_min",
+            self.session.pre_break_buffer_min,
+            c.min_pre_break_buffer_min,
+        )
+        under(
+            "session.news_high.before_min", self.session.news_high.before_min, c.min_news_before_min
+        )
         under("session.news_high.after_min", self.session.news_high.after_min, c.min_news_after_min)
-        under("session.fix_window.before_min", self.session.fix_window.before_min, c.min_fix_window_min)
+        under(
+            "session.fix_window.before_min",
+            self.session.fix_window.before_min,
+            c.min_fix_window_min,
+        )
         if r.stop_atr_min <= 0 or r.stop_atr_min > r.stop_atr_max:
             errors.append("owner.risk.stop_atr_min must be > 0 and <= stop_atr_max")
         if self.owner.mode == "live" and self.account.environment != "live":

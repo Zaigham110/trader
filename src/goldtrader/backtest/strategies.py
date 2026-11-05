@@ -5,6 +5,7 @@ A strategy turns the causal features frame into a per-bar signal: desired side (
 including bar i's close; the engine acts at bar i+1's open (TEST_PLAN §2 look-ahead rule).
 Martingale, grid and averaging-down are not expressible here (D-008): one signal, one position.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -19,7 +20,8 @@ from goldtrader.data.features import session_high_low
 @dataclass(frozen=True)
 class SignalFrame:
     """Per-bar arrays aligned with the features frame."""
-    side: np.ndarray        # int8: +1, -1, 0
+
+    side: np.ndarray  # int8: +1, -1, 0
     stop_atr: float
     target_atr: float
 
@@ -47,6 +49,7 @@ class TrendATR:
     Enter long when trend_state turns +1 (fast EMA above slow and price above fast), short on −1.
     `min_atr_pct` skips entries in dead markets; `max_atr_pctile` skips the stress regime.
     """
+
     id: str = "trend_atr_v1"
     kind: str = "trend_atr"
     stop_atr: float = 1.0
@@ -67,7 +70,10 @@ class TrendATR:
             ok = df["atr_pct"].to_numpy(dtype=float) >= self.min_atr_pct
             side = np.where(ok, side, 0).astype(np.int8)
         if "atr_pctile" in df and self.max_atr_pctile < 1.0:
-            ok = np.nan_to_num(df["atr_pctile"].to_numpy(dtype=float), nan=1.0) <= self.max_atr_pctile
+            ok = (
+                np.nan_to_num(df["atr_pctile"].to_numpy(dtype=float), nan=1.0)
+                <= self.max_atr_pctile
+            )
             side = np.where(ok, side, 0).astype(np.int8)
         return SignalFrame(side, self.stop_atr, self.target_atr)
 
@@ -79,6 +85,7 @@ class BreakoutSession:
     Evidence is weak (RESEARCH §1.7: vendor backtests only); included so the pipeline can test it
     as a pre-registered hypothesis under a clock-aware cost model, not because it is expected to work.
     """
+
     id: str = "breakout_session_v1"
     kind: str = "breakout_session"
     range_start_hour: int = 0
@@ -99,7 +106,7 @@ class BreakoutSession:
         side[(mid > hi) & in_window] = 1
         side[(mid < lo) & in_window] = -1
         # first breakout of the day only
-        day = (df["time"].to_numpy(dtype=np.int64) // 86400)
+        day = df["time"].to_numpy(dtype=np.int64) // 86400
         seen_day = -1
         for i in range(len(side)):
             if side[i] != 0:

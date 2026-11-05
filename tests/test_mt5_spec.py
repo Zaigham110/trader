@@ -1,4 +1,5 @@
 """Spec helpers: read/diff/critical changes, gold symbol discovery, money math."""
+
 from __future__ import annotations
 
 from dataclasses import replace
@@ -37,10 +38,18 @@ def test_diff_specs_lists_changed_fields_in_declaration_order():
 def test_critical_changes_follow_symbolspec_critical():
     benign = replace(DEFAULT_SPEC, swap_long=-25.0, description="x")
     assert critical_changes(DEFAULT_SPEC, benign) == []
-    bad = replace(DEFAULT_SPEC, trade_contract_size=1000.0, volume_step=0.1,
-                  trade_mode=K.SYMBOL_TRADE_MODE_CLOSEONLY, swap_long=-1.0)
-    assert critical_changes(DEFAULT_SPEC, bad) == ["trade_contract_size", "volume_step",
-                                                   "trade_mode"]
+    bad = replace(
+        DEFAULT_SPEC,
+        trade_contract_size=1000.0,
+        volume_step=0.1,
+        trade_mode=K.SYMBOL_TRADE_MODE_CLOSEONLY,
+        swap_long=-1.0,
+    )
+    assert critical_changes(DEFAULT_SPEC, bad) == [
+        "trade_contract_size",
+        "volume_step",
+        "trade_mode",
+    ]
     for name in DEFAULT_SPEC.CRITICAL:
         assert name in {f for f in dir(DEFAULT_SPEC) if not f.startswith("_")}
 

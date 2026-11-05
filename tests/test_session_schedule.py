@@ -1,4 +1,5 @@
 """Schedule tests (R-002, KU-008): Exness XAUUSD winter/summer hours, DST boundaries 2026."""
+
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -28,6 +29,7 @@ def sched():
 # 2026-01-12 Mon, 2026-01-11 Sun, 2026-01-16 Fri, 2026-01-17 Sat.
 
 # -- DST ------------------------------------------------------------------------------------------
+
 
 def test_us_dst_bounds_2026():
     start, end = us_dst_bounds(2026)
@@ -62,6 +64,7 @@ def test_bad_dst_mode_rejected():
 
 
 # -- weekday states --------------------------------------------------------------------------------
+
 
 def test_wednesday_break_shifts_with_dst(sched):
     # Winter break 21:58-23:02, summer break 20:58-22:02 (docs/research/02 §3). 21:59 is inside
@@ -113,6 +116,7 @@ def test_friday_and_saturday(sched):
 
 
 # -- seconds_to_close / next_transition ---------------------------------------------------------
+
 
 def test_seconds_to_close_winter_wednesday(sched):
     assert sched.seconds_to_close(utc(2026, 1, 14, 21, 40)) == 1080
@@ -183,16 +187,23 @@ def test_next_transition_is_strictly_after_and_state_changes(sched):
 
 # -- input validation / helpers ------------------------------------------------------------------
 
+
 def test_naive_datetime_rejected(sched):
     naive = datetime(2026, 1, 14, 12, 0)
-    for fn in (sched.state_at, sched.next_transition, sched.seconds_to_close, sched.is_dst,
-               sched.in_maintenance):
+    for fn in (
+        sched.state_at,
+        sched.next_transition,
+        sched.seconds_to_close,
+        sched.is_dst,
+        sched.in_maintenance,
+    ):
         with pytest.raises(ValueError, match="aware"):
             fn(naive)
 
 
 def test_non_utc_aware_is_converted(sched):
     from zoneinfo import ZoneInfo
+
     # 16:59 New York EST = 21:59 UTC on Wed 14 Jan → CLOSED
     ny = datetime(2026, 1, 14, 16, 59, tzinfo=ZoneInfo("America/New_York"))
     assert sched.state_at(ny) is CLOSED
@@ -204,8 +215,10 @@ def test_maintenance_window(sched):
     assert not sched.in_maintenance(utc(2026, 1, 14, 6))
     assert sched.in_maintenance(utc(2026, 7, 18, 4, 30))
     assert not sched.in_maintenance(utc(2026, 7, 18, 8, 30))
-    assert sched.maintenance_window(utc(2026, 1, 17).date()) == (utc(2026, 1, 17, 5),
-                                                                  utc(2026, 1, 17, 9))
+    assert sched.maintenance_window(utc(2026, 1, 17).date()) == (
+        utc(2026, 1, 17, 5),
+        utc(2026, 1, 17, 9),
+    )
     assert sched.maintenance_window(utc(2026, 1, 14).date()) is None
 
 

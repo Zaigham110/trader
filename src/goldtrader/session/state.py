@@ -20,6 +20,7 @@ Precedence of :meth:`SessionClock.state_at` (most restrictive information wins, 
 6. ``trade_only_hours_utc`` outside its range → OPEN with ``entries_allowed=False``.
 7. OPEN with ``entries_allowed=True``.
 """
+
 from __future__ import annotations
 
 import logging
@@ -91,8 +92,13 @@ class SessionClock:
         nxt_when, _ = self.schedule.next_transition(dt)
 
         def decide(state: SessionState, reason: str, *, entries: bool = False) -> SessionDecision:
-            return SessionDecision(state=state, reason=reason, seconds_to_close=stc,
-                                   next_transition=nxt_when, entries_allowed=entries)
+            return SessionDecision(
+                state=state,
+                reason=reason,
+                seconds_to_close=stc,
+                next_transition=nxt_when,
+                entries_allowed=entries,
+            )
 
         side_note = ""
         if trade_mode is not None:
@@ -100,27 +106,38 @@ class SessionClock:
                 reason = "broker_disabled"
                 if sched is not ScheduleState.CLOSED:
                     reason = "broker_overrides_schedule:disabled"
-                    log.warning("broker trade_mode DISABLED while schedule says %s at %s",
-                                sched.value, dt.isoformat())
+                    log.warning(
+                        "broker trade_mode DISABLED while schedule says %s at %s",
+                        sched.value,
+                        dt.isoformat(),
+                    )
                 return decide(SessionState.CLOSED, reason)
             if trade_mode == K.SYMBOL_TRADE_MODE_CLOSEONLY:
                 reason = "broker_close_only"
                 if sched is not ScheduleState.CLOSE_ONLY:
                     reason = "broker_overrides_schedule:close_only"
-                    log.warning("broker trade_mode CLOSEONLY while schedule says %s at %s",
-                                sched.value, dt.isoformat())
+                    log.warning(
+                        "broker trade_mode CLOSEONLY while schedule says %s at %s",
+                        sched.value,
+                        dt.isoformat(),
+                    )
                 return decide(SessionState.CLOSE_ONLY, reason)
             if trade_mode == K.SYMBOL_TRADE_MODE_LONGONLY:
                 side_note = "broker_long_only"
             elif trade_mode == K.SYMBOL_TRADE_MODE_SHORTONLY:
                 side_note = "broker_short_only"
             elif trade_mode != K.SYMBOL_TRADE_MODE_FULL:
-                log.error("unknown symbol trade_mode %r at %s; failing closed", trade_mode,
-                          dt.isoformat())
+                log.error(
+                    "unknown symbol trade_mode %r at %s; failing closed", trade_mode, dt.isoformat()
+                )
                 return decide(SessionState.CLOSED, "broker_trade_mode_unknown")
             if sched is not ScheduleState.OPEN:
-                log.warning("broker trade_mode %s while schedule says %s at %s; schedule wins",
-                            trade_mode, sched.value, dt.isoformat())
+                log.warning(
+                    "broker trade_mode %s while schedule says %s at %s; schedule wins",
+                    trade_mode,
+                    sched.value,
+                    dt.isoformat(),
+                )
 
         if sched is ScheduleState.CLOSED:
             return decide(SessionState.CLOSED, "schedule_closed")
@@ -128,8 +145,10 @@ class SessionClock:
             return decide(SessionState.CLOSE_ONLY, "schedule_close_only")
 
         if last_tick_age_s is not None and last_tick_age_s > self.cfg.stale_tick_seconds:
-            return decide(SessionState.STALE,
-                          f"stale_ticks:{last_tick_age_s:.1f}s>{self.cfg.stale_tick_seconds}s")
+            return decide(
+                SessionState.STALE,
+                f"stale_ticks:{last_tick_age_s:.1f}s>{self.cfg.stale_tick_seconds}s",
+            )
 
         if stc is not None and stc <= self.cfg.pre_break_buffer_min * 60:
             return decide(SessionState.PRE_BREAK_BUFFER, f"pre_break_buffer:{stc}s")

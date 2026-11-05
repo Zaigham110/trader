@@ -1,4 +1,5 @@
 """Resampling: 1 s sampling, bar OHLC against hand-built ticks, alignment, gaps, round trips."""
+
 from __future__ import annotations
 
 from datetime import UTC, datetime
@@ -35,7 +36,7 @@ def test_sample_1s_keeps_last_tick_per_second_and_floors_time():
 
 
 def test_sample_1s_sorts_unsorted_input_stably():
-    ticks = [tick(900, 2.0), tick(100, 1.0), tick(100, 1.5)]   # same ms twice: last seen wins
+    ticks = [tick(900, 2.0), tick(100, 1.0), tick(100, 1.5)]  # same ms twice: last seen wins
     out = sample_1s(ticks)
     assert out == [Tick(time_msc=T0 * 1000, bid=2.0, ask=2.2)]
     assert sample_1s([]) == []
@@ -43,10 +44,13 @@ def test_sample_1s_sorts_unsorted_input_stably():
 
 def test_build_bars_ohlc_matches_hand_built_ticks():
     ticks = [
-        tick(0, 100.0, 100.3), tick(10_000, 101.0, 101.2), tick(20_000, 99.0, 99.5),
-        tick(59_999, 100.5, 100.6),              # bar 0: 4 ticks
-        tick(60_000, 102.0, 102.1),              # bar 1: exactly on the boundary, 1 tick
-        tick(180_000, 98.0, 98.4), tick(181_000, 97.0, 97.1),   # bar 3 (bar 2 is a gap)
+        tick(0, 100.0, 100.3),
+        tick(10_000, 101.0, 101.2),
+        tick(20_000, 99.0, 99.5),
+        tick(59_999, 100.5, 100.6),  # bar 0: 4 ticks
+        tick(60_000, 102.0, 102.1),  # bar 1: exactly on the boundary, 1 tick
+        tick(180_000, 98.0, 98.4),
+        tick(181_000, 97.0, 97.1),  # bar 3 (bar 2 is a gap)
     ]
     bars = build_bars(ticks, 60)
     assert [b.time for b in bars] == [T0, T0 + 60, T0 + 180]
@@ -81,8 +85,10 @@ def test_no_bars_during_daily_break_or_weekend_and_no_filling():
     assert not ((weekday == 4) & (sod >= 21 * 3600 + 58 * 60)).any(), "Friday closes 21:58"
     # bar-open gaps: 21:57 → 23:02 daily (65 min), Friday 21:57 → Sunday 23:05
     gaps = np.diff(times)
-    assert set(gaps[gaps > 60].tolist()) == {65 * 60, 2 * 86400 + (23 * 3600 + 5 * 60) - (
-        21 * 3600 + 57 * 60)}
+    assert set(gaps[gaps > 60].tolist()) == {
+        65 * 60,
+        2 * 86400 + (23 * 3600 + 5 * 60) - (21 * 3600 + 57 * 60),
+    }
     assert all(b.ticks >= 1 for b in bars)
     # every minute with a tick has a bar and vice versa
     minutes_with_ticks = {t.time_msc // 60_000 * 60 for t in ticks}
@@ -104,7 +110,7 @@ def test_bars_frame_round_trip_and_columns():
     # inference without attrs falls back to the smallest gap
     naked = df.copy()
     naked.attrs = {}
-    assert infer_bar_seconds(naked) == 120   # only bars at T0 and T0+120 exist
+    assert infer_bar_seconds(naked) == 120  # only bars at T0 and T0+120 exist
     assert frame_to_bars(naked, seconds=60) == bars
 
 

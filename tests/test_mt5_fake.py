@@ -1,4 +1,5 @@
 """FakeMT5 behaviour: fills, stops, closes, every documented retcode, account math, history."""
+
 from __future__ import annotations
 
 from dataclasses import replace
@@ -82,7 +83,9 @@ def test_open_creates_position_and_in_deal(fake):
     assert pos.type == K.POSITION_TYPE_BUY and pos.volume == 0.01 and pos.price_open == ASK
     assert pos.sl == 3990.0 and pos.tp == 4010.0 and pos.magic == 42 and pos.comment == "p1"
     assert pos.identifier == pos.ticket and pos.side == "long"
-    deals = fake.history_deals_get(datetime(2000, 1, 1, tzinfo=UTC), datetime(2100, 1, 1, tzinfo=UTC))
+    deals = fake.history_deals_get(
+        datetime(2000, 1, 1, tzinfo=UTC), datetime(2100, 1, 1, tzinfo=UTC)
+    )
     assert len(deals) == 1 and deals[0].entry == K.DEAL_ENTRY_IN and deals[0].profit == 0.0
     assert deals[0].position_id == pos.ticket and deals[0].type == K.DEAL_TYPE_BUY
 
@@ -96,8 +99,11 @@ def test_long_stop_loss_triggers_on_bid_and_books_out_deal(fake):
     assert fake.positions_get(ticket=pos.ticket)
     fake.set_price(3994.5, 3994.7)  # bid <= sl → closes at this tick's bid
     assert not fake.positions_get(ticket=pos.ticket)
-    out = [d for d in fake.history_deals_get(None, None, position=pos.ticket)
-           if d.entry == K.DEAL_ENTRY_OUT]
+    out = [
+        d
+        for d in fake.history_deals_get(None, None, position=pos.ticket)
+        if d.entry == K.DEAL_ENTRY_OUT
+    ]
     assert len(out) == 1
     assert out[0].price == 3994.5 and out[0].type == K.DEAL_TYPE_SELL
     assert out[0].profit == pytest.approx((3994.5 - ASK) * 0.01 * 100)
@@ -135,19 +141,54 @@ def test_short_stop_and_take_profit_use_ask(fake):
 
 def test_sltp_modify(fake):
     pos = open_pos(fake)
-    ok = fake.order_send(OrderRequest(action=K.TRADE_ACTION_SLTP, symbol="XAUUSDm", volume=0,
-                                      type=0, position=pos.ticket, sl=3990.0, tp=4010.0))
+    ok = fake.order_send(
+        OrderRequest(
+            action=K.TRADE_ACTION_SLTP,
+            symbol="XAUUSDm",
+            volume=0,
+            type=0,
+            position=pos.ticket,
+            sl=3990.0,
+            tp=4010.0,
+        )
+    )
     assert ok.retcode == K.TRADE_RETCODE_DONE
     p = fake.positions_get(ticket=pos.ticket)[0]
     assert (p.sl, p.tp) == (3990.0, 4010.0)
-    same = fake.order_send(OrderRequest(action=K.TRADE_ACTION_SLTP, symbol="XAUUSDm", volume=0,
-                                        type=0, position=pos.ticket, sl=3990.0, tp=4010.0))
+    same = fake.order_send(
+        OrderRequest(
+            action=K.TRADE_ACTION_SLTP,
+            symbol="XAUUSDm",
+            volume=0,
+            type=0,
+            position=pos.ticket,
+            sl=3990.0,
+            tp=4010.0,
+        )
+    )
     assert same.retcode == K.TRADE_RETCODE_NO_CHANGES
-    bad = fake.order_send(OrderRequest(action=K.TRADE_ACTION_SLTP, symbol="XAUUSDm", volume=0,
-                                       type=0, position=pos.ticket, sl=4000.10, tp=4010.0))
+    bad = fake.order_send(
+        OrderRequest(
+            action=K.TRADE_ACTION_SLTP,
+            symbol="XAUUSDm",
+            volume=0,
+            type=0,
+            position=pos.ticket,
+            sl=4000.10,
+            tp=4010.0,
+        )
+    )
     assert bad.retcode == K.TRADE_RETCODE_INVALID_STOPS
-    gone = fake.order_send(OrderRequest(action=K.TRADE_ACTION_SLTP, symbol="XAUUSDm", volume=0,
-                                        type=0, position=999999, sl=3990.0))
+    gone = fake.order_send(
+        OrderRequest(
+            action=K.TRADE_ACTION_SLTP,
+            symbol="XAUUSDm",
+            volume=0,
+            type=0,
+            position=999999,
+            sl=3990.0,
+        )
+    )
     assert gone.retcode == K.TRADE_RETCODE_POSITION_CLOSED
 
 
@@ -178,12 +219,19 @@ def test_close_with_same_type_is_invalid(fake):
 
 
 def test_close_by(fake):
-    buy = open_pos(fake)                                   # at 4000.20
+    buy = open_pos(fake)  # at 4000.20
     fake.set_price(4001.00, 4001.20)
-    sell = open_pos(fake, otype=K.ORDER_TYPE_SELL)         # at 4001.00
-    res = fake.order_send(OrderRequest(action=K.TRADE_ACTION_CLOSE_BY, symbol="XAUUSDm",
-                                       volume=0.01, type=K.ORDER_TYPE_CLOSE_BY,
-                                       position=buy.ticket, position_by=sell.ticket))
+    sell = open_pos(fake, otype=K.ORDER_TYPE_SELL)  # at 4001.00
+    res = fake.order_send(
+        OrderRequest(
+            action=K.TRADE_ACTION_CLOSE_BY,
+            symbol="XAUUSDm",
+            volume=0.01,
+            type=K.ORDER_TYPE_CLOSE_BY,
+            position=buy.ticket,
+            position_by=sell.ticket,
+        )
+    )
     assert res.retcode == K.TRADE_RETCODE_DONE
     assert fake.positions_get() == []
     out_by = [d for d in fake.deals if d.entry == K.DEAL_ENTRY_OUT_BY]
@@ -196,9 +244,16 @@ def test_close_by_rejected_on_netting_account(fake):
     fake.set_account(margin_mode=K.ACCOUNT_MARGIN_MODE_RETAIL_NETTING)
     a = open_pos(fake)
     b = open_pos(fake, otype=K.ORDER_TYPE_SELL)
-    res = fake.order_send(OrderRequest(action=K.TRADE_ACTION_CLOSE_BY, symbol="XAUUSDm",
-                                       volume=0.01, type=K.ORDER_TYPE_CLOSE_BY,
-                                       position=a.ticket, position_by=b.ticket))
+    res = fake.order_send(
+        OrderRequest(
+            action=K.TRADE_ACTION_CLOSE_BY,
+            symbol="XAUUSDm",
+            volume=0.01,
+            type=K.ORDER_TYPE_CLOSE_BY,
+            position=a.ticket,
+            position_by=b.ticket,
+        )
+    )
     assert res.retcode == K.TRADE_RETCODE_HEDGE_PROHIBITED
 
 
@@ -210,22 +265,27 @@ def test_invalid_volume(fake, volume):
     assert fake.order_send(deal(volume=volume)).retcode == K.TRADE_RETCODE_INVALID_VOLUME
 
 
-@pytest.mark.parametrize("otype,sl,tp", [
-    (K.ORDER_TYPE_BUY, 4000.10, 0.0),    # SL inside the spread
-    (K.ORDER_TYPE_BUY, 4000.00, 0.0),    # SL at the bid
-    (K.ORDER_TYPE_BUY, 4005.00, 0.0),    # SL on the wrong side
-    (K.ORDER_TYPE_BUY, 0.0, 3999.00),    # TP on the wrong side
-    (K.ORDER_TYPE_SELL, 4000.10, 0.0),   # short SL inside the spread
-    (K.ORDER_TYPE_SELL, 3990.00, 0.0),   # short SL wrong side
-    (K.ORDER_TYPE_SELL, 0.0, 4005.00),   # short TP wrong side
-])
+@pytest.mark.parametrize(
+    "otype,sl,tp",
+    [
+        (K.ORDER_TYPE_BUY, 4000.10, 0.0),  # SL inside the spread
+        (K.ORDER_TYPE_BUY, 4000.00, 0.0),  # SL at the bid
+        (K.ORDER_TYPE_BUY, 4005.00, 0.0),  # SL on the wrong side
+        (K.ORDER_TYPE_BUY, 0.0, 3999.00),  # TP on the wrong side
+        (K.ORDER_TYPE_SELL, 4000.10, 0.0),  # short SL inside the spread
+        (K.ORDER_TYPE_SELL, 3990.00, 0.0),  # short SL wrong side
+        (K.ORDER_TYPE_SELL, 0.0, 4005.00),  # short TP wrong side
+    ],
+)
 def test_invalid_stops(fake, otype, sl, tp):
     assert fake.order_send(deal(otype=otype, sl=sl, tp=tp)).retcode == K.TRADE_RETCODE_INVALID_STOPS
 
 
 def test_limit_type_tp_may_sit_inside_the_spread(fake):
     assert fake.order_send(deal(tp=4000.10)).retcode == K.TRADE_RETCODE_DONE
-    assert fake.order_send(deal(otype=K.ORDER_TYPE_SELL, tp=4000.10)).retcode == K.TRADE_RETCODE_DONE
+    assert (
+        fake.order_send(deal(otype=K.ORDER_TYPE_SELL, tp=4000.10)).retcode == K.TRADE_RETCODE_DONE
+    )
 
 
 def test_stops_level_distance_enforced(fake):
@@ -238,15 +298,19 @@ def test_trade_mode_disabled_and_closeonly(fake):
     pos = open_pos(fake)
     fake.set_trade_mode(K.SYMBOL_TRADE_MODE_CLOSEONLY)
     assert fake.order_send(deal()).retcode == K.TRADE_RETCODE_MARKET_CLOSED
-    assert fake.order_send(deal(otype=K.ORDER_TYPE_SELL, position=pos.ticket)).retcode \
+    assert (
+        fake.order_send(deal(otype=K.ORDER_TYPE_SELL, position=pos.ticket)).retcode
         == K.TRADE_RETCODE_DONE
+    )
     pos2 = None
     fake.set_trade_mode(K.SYMBOL_TRADE_MODE_FULL)
     pos2 = open_pos(fake)
     fake.set_trade_mode(K.SYMBOL_TRADE_MODE_DISABLED)
     assert fake.order_send(deal()).retcode == K.TRADE_RETCODE_MARKET_CLOSED
-    assert fake.order_send(deal(otype=K.ORDER_TYPE_SELL, position=pos2.ticket)).retcode \
+    assert (
+        fake.order_send(deal(otype=K.ORDER_TYPE_SELL, position=pos2.ticket)).retcode
         == K.TRADE_RETCODE_MARKET_CLOSED
+    )
     fake.set_trade_mode(K.SYMBOL_TRADE_MODE_LONGONLY)
     assert fake.order_send(deal(otype=K.ORDER_TYPE_SELL)).retcode == K.TRADE_RETCODE_LONG_ONLY
 
@@ -279,12 +343,16 @@ def test_no_money(fake):
 
 
 def test_invalid_fill(fake):
-    assert fake.order_send(deal(type_filling=K.ORDER_FILLING_RETURN)).retcode \
+    assert (
+        fake.order_send(deal(type_filling=K.ORDER_FILLING_RETURN)).retcode
         == K.TRADE_RETCODE_INVALID_FILL
+    )
     assert fake.order_send(deal(type_filling=K.ORDER_FILLING_IOC)).retcode == K.TRADE_RETCODE_DONE
     fake.set_spec(replace(DEFAULT_SPEC, filling_mode=K.SYMBOL_FILLING_FOK))
-    assert fake.order_send(deal(type_filling=K.ORDER_FILLING_IOC)).retcode \
+    assert (
+        fake.order_send(deal(type_filling=K.ORDER_FILLING_IOC)).retcode
         == K.TRADE_RETCODE_INVALID_FILL
+    )
     assert fake.order_send(deal(type_filling=K.ORDER_FILLING_FOK)).retcode == K.TRADE_RETCODE_DONE
 
 
@@ -335,7 +403,7 @@ def test_margin_equity_and_profit_follow_the_tick(fake):
     acct = fake.account_info()
     margin = 0.01 * 100 * ASK / 500
     assert acct.margin == pytest.approx(margin, abs=0.01)
-    assert acct.profit == pytest.approx((BID - ASK) * 1.0)            # -0.20
+    assert acct.profit == pytest.approx((BID - ASK) * 1.0)  # -0.20
     assert acct.equity == pytest.approx(5000 + acct.profit)
     assert acct.margin_free == pytest.approx(acct.equity - acct.margin)
     assert acct.margin_level == pytest.approx(acct.equity / acct.margin * 100, rel=1e-3)
@@ -371,10 +439,12 @@ def test_history_deals_filter_by_time_and_position(fake):
     a = open_pos(fake)
     fake.set_price(BID, ASK, time_msc=1_700_000_120_000)
     b = open_pos(fake)
-    assert [d.position_id for d in fake.history_deals_get(None, None, position=a.ticket)] \
-        == [a.ticket]
-    window = fake.history_deals_get(datetime.fromtimestamp(1_700_000_100, UTC),
-                                    datetime.fromtimestamp(1_700_000_200, UTC))
+    assert [d.position_id for d in fake.history_deals_get(None, None, position=a.ticket)] == [
+        a.ticket
+    ]
+    window = fake.history_deals_get(
+        datetime.fromtimestamp(1_700_000_100, UTC), datetime.fromtimestamp(1_700_000_200, UTC)
+    )
     assert [d.position_id for d in window] == [b.ticket]
 
 
@@ -391,9 +461,17 @@ def test_copy_rates_builds_minute_bars_from_fed_ticks():
     assert [b.time for b in bars] == [t0 // 1000, t0 // 1000 + 60, t0 // 1000 + 120]
     first = bars[0]
     assert (first.bid_open, first.bid_high, first.bid_low, first.bid_close) == (
-        4000.0, 4001.0, 3999.5, 3999.5)
+        4000.0,
+        4001.0,
+        3999.5,
+        3999.5,
+    )
     assert (first.ask_open, first.ask_high, first.ask_low, first.ask_close) == (
-        4000.2, 4001.3, 3999.7, 3999.7)
+        4000.2,
+        4001.3,
+        3999.7,
+        3999.7,
+    )
     assert first.ticks == 3 and first.seconds == 60
     assert fake.copy_rates_from("XAUUSDm", K.TIMEFRAME_M1, now, 2) == bars[1:]
     minute2 = datetime.fromtimestamp(t0 / 1000 + 60, UTC)
@@ -401,14 +479,26 @@ def test_copy_rates_builds_minute_bars_from_fed_ticks():
     assert rng == [bars[1]]
     m5 = fake.copy_rates_from("XAUUSDm", K.TIMEFRAME_M5, now, 10)
     assert sum(b.ticks for b in m5) == 5 and all(b.seconds == 300 for b in m5)
-    ticks = fake.copy_ticks_range("XAUUSDm", datetime.fromtimestamp(t0 / 1000, UTC),
-                                  datetime.fromtimestamp(t0 / 1000 + 60, UTC), K.COPY_TICKS_ALL)
+    ticks = fake.copy_ticks_range(
+        "XAUUSDm",
+        datetime.fromtimestamp(t0 / 1000, UTC),
+        datetime.fromtimestamp(t0 / 1000 + 60, UTC),
+        K.COPY_TICKS_ALL,
+    )
     assert len(ticks) == 4
-    assert len(fake.copy_ticks_from("XAUUSDm", datetime.fromtimestamp(t0 / 1000 + 60, UTC), 1,
-                                    K.COPY_TICKS_ALL)) == 1
+    assert (
+        len(
+            fake.copy_ticks_from(
+                "XAUUSDm", datetime.fromtimestamp(t0 / 1000 + 60, UTC), 1, K.COPY_TICKS_ALL
+            )
+        )
+        == 1
+    )
     # no history → None + RES_E_NOT_FOUND, like the package
-    assert fake.copy_rates_from("XAUUSDm", K.TIMEFRAME_M1, datetime(2000, 1, 1, tzinfo=UTC), 10) \
+    assert (
+        fake.copy_rates_from("XAUUSDm", K.TIMEFRAME_M1, datetime(2000, 1, 1, tzinfo=UTC), 10)
         is None
+    )
     assert fake.last_error()[0] == K.RES_E_NOT_FOUND
 
 
@@ -426,29 +516,65 @@ def test_timeframe_encoding_and_bar_builder():
 
 
 def test_pending_buy_stop_places_triggers_and_can_be_removed(fake):
-    place = fake.order_send(OrderRequest(action=K.TRADE_ACTION_PENDING, symbol="XAUUSDm",
-                                         volume=0.01, type=K.ORDER_TYPE_BUY_STOP, price=4001.0,
-                                         tp=4010.0, type_filling=K.ORDER_FILLING_FOK))
+    place = fake.order_send(
+        OrderRequest(
+            action=K.TRADE_ACTION_PENDING,
+            symbol="XAUUSDm",
+            volume=0.01,
+            type=K.ORDER_TYPE_BUY_STOP,
+            price=4001.0,
+            tp=4010.0,
+            type_filling=K.ORDER_FILLING_FOK,
+        )
+    )
     assert place.retcode == K.TRADE_RETCODE_PLACED and len(fake.orders_get("XAUUSDm")) == 1
-    bad = fake.order_send(OrderRequest(action=K.TRADE_ACTION_PENDING, symbol="XAUUSDm",
-                                       volume=0.01, type=K.ORDER_TYPE_BUY_STOP, price=3999.0))
+    bad = fake.order_send(
+        OrderRequest(
+            action=K.TRADE_ACTION_PENDING,
+            symbol="XAUUSDm",
+            volume=0.01,
+            type=K.ORDER_TYPE_BUY_STOP,
+            price=3999.0,
+        )
+    )
     assert bad.retcode == K.TRADE_RETCODE_INVALID_PRICE
     fake.set_price(4000.9, 4001.1)  # ask >= 4001.0, gap 0.1 < 3×spread → fills at requested price
     assert fake.orders_get() == []
     pos = fake.positions_get()
     assert len(pos) == 1 and pos[0].price_open == 4001.0 and pos[0].tp == 4010.0
     # removal path
-    p2 = fake.order_send(OrderRequest(action=K.TRADE_ACTION_PENDING, symbol="XAUUSDm",
-                                      volume=0.01, type=K.ORDER_TYPE_SELL_LIMIT, price=4005.0))
-    rem = fake.order_send(OrderRequest(action=K.TRADE_ACTION_REMOVE, symbol="XAUUSDm", volume=0,
-                                       type=K.ORDER_TYPE_SELL_LIMIT, order=p2.order))
+    p2 = fake.order_send(
+        OrderRequest(
+            action=K.TRADE_ACTION_PENDING,
+            symbol="XAUUSDm",
+            volume=0.01,
+            type=K.ORDER_TYPE_SELL_LIMIT,
+            price=4005.0,
+        )
+    )
+    rem = fake.order_send(
+        OrderRequest(
+            action=K.TRADE_ACTION_REMOVE,
+            symbol="XAUUSDm",
+            volume=0,
+            type=K.ORDER_TYPE_SELL_LIMIT,
+            order=p2.order,
+        )
+    )
     assert rem.retcode == K.TRADE_RETCODE_DONE and fake.orders_get() == []
 
 
 def test_pending_sl_violated_on_gap_is_cancelled(fake):
-    res = fake.order_send(OrderRequest(action=K.TRADE_ACTION_PENDING, symbol="XAUUSDm",
-                                       volume=0.01, type=K.ORDER_TYPE_BUY_STOP, price=4001.0,
-                                       tp=4001.5))
+    res = fake.order_send(
+        OrderRequest(
+            action=K.TRADE_ACTION_PENDING,
+            symbol="XAUUSDm",
+            volume=0.01,
+            type=K.ORDER_TYPE_BUY_STOP,
+            price=4001.0,
+            tp=4001.5,
+        )
+    )
     assert res.retcode == K.TRADE_RETCODE_PLACED
     fake.set_price(4009.8, 4010.0)  # gap: fills at market 4010 which is beyond the TP
     assert fake.orders_get() == [] and fake.positions_get() == []
@@ -456,8 +582,15 @@ def test_pending_sl_violated_on_gap_is_cancelled(fake):
 
 
 def test_pending_orders_cancelled_in_close_only(fake):
-    fake.order_send(OrderRequest(action=K.TRADE_ACTION_PENDING, symbol="XAUUSDm", volume=0.01,
-                                 type=K.ORDER_TYPE_SELL_LIMIT, price=4005.0))
+    fake.order_send(
+        OrderRequest(
+            action=K.TRADE_ACTION_PENDING,
+            symbol="XAUUSDm",
+            volume=0.01,
+            type=K.ORDER_TYPE_SELL_LIMIT,
+            price=4005.0,
+        )
+    )
     fake.set_trade_mode(K.SYMBOL_TRADE_MODE_CLOSEONLY)
     fake.set_price(BID, ASK)
     assert fake.orders_get() == []

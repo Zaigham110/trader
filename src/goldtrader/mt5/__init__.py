@@ -1,4 +1,5 @@
 """MT5 access layer. Only `goldtrader.mt5.real` imports the MetaTrader5 package (Windows only)."""
+
 from goldtrader.mt5.fake import FakeMT5  # noqa: F401
 from goldtrader.mt5.protocol import (  # noqa: F401
     MT5Client,

@@ -1,4 +1,5 @@
 """Thin repository functions for Phase 3 tables. No ORM; explicit SQL."""
+
 from __future__ import annotations
 
 import hashlib
@@ -56,16 +57,44 @@ class Repo:
             "INSERT INTO account_snapshots(read_ms, login, server, company, currency, trade_mode, "
             "leverage, margin_mode, balance, equity, margin, margin_free, margin_level, profit, "
             "trade_allowed, trade_expert) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (now_ms(), a.login, a.server, a.company, a.currency, a.trade_mode, a.leverage,
-             a.margin_mode, a.balance, a.equity, a.margin, a.margin_free, a.margin_level, a.profit,
-             int(a.trade_allowed), int(a.trade_expert)),
+            (
+                now_ms(),
+                a.login,
+                a.server,
+                a.company,
+                a.currency,
+                a.trade_mode,
+                a.leverage,
+                a.margin_mode,
+                a.balance,
+                a.equity,
+                a.margin,
+                a.margin_free,
+                a.margin_level,
+                a.profit,
+                int(a.trade_allowed),
+                int(a.trade_expert),
+            ),
         )
 
     # --- bars ---------------------------------------------------------------------------
     def upsert_bars(self, symbol: str, bars: Iterable[Bar], source: str) -> int:
         rows = [
-            (symbol, b.seconds, b.time, b.bid_open, b.bid_high, b.bid_low, b.bid_close,
-             b.ask_open, b.ask_high, b.ask_low, b.ask_close, b.ticks, source)
+            (
+                symbol,
+                b.seconds,
+                b.time,
+                b.bid_open,
+                b.bid_high,
+                b.bid_low,
+                b.bid_close,
+                b.ask_open,
+                b.ask_high,
+                b.ask_low,
+                b.ask_close,
+                b.ticks,
+                source,
+            )
             for b in bars
         ]
         with self.c:
@@ -77,8 +106,9 @@ class Repo:
             )
         return len(rows)
 
-    def load_bars(self, symbol: str, seconds: int, start_s: int | None = None,
-                  end_s: int | None = None) -> list[Bar]:
+    def load_bars(
+        self, symbol: str, seconds: int, start_s: int | None = None, end_s: int | None = None
+    ) -> list[Bar]:
         q = "SELECT * FROM bars WHERE symbol=? AND seconds=?"
         args: list[Any] = [symbol, seconds]
         if start_s is not None:
@@ -89,45 +119,106 @@ class Repo:
             args.append(end_s)
         q += " ORDER BY time_s"
         return [
-            Bar(time=r["time_s"], seconds=r["seconds"], bid_open=r["bid_open"],
-                bid_high=r["bid_high"], bid_low=r["bid_low"], bid_close=r["bid_close"],
-                ask_open=r["ask_open"], ask_high=r["ask_high"], ask_low=r["ask_low"],
-                ask_close=r["ask_close"], ticks=r["ticks"])
+            Bar(
+                time=r["time_s"],
+                seconds=r["seconds"],
+                bid_open=r["bid_open"],
+                bid_high=r["bid_high"],
+                bid_low=r["bid_low"],
+                bid_close=r["bid_close"],
+                ask_open=r["ask_open"],
+                ask_high=r["ask_high"],
+                ask_low=r["ask_low"],
+                ask_close=r["ask_close"],
+                ticks=r["ticks"],
+            )
             for r in self.c.execute(q, args)
         ]
 
     def bar_gaps(self, symbol: str, seconds: int, expected_open: Iterable[int]) -> list[int]:
         """Return expected bar times (epoch s) with no stored bar — the data soak check."""
-        have = {r["time_s"] for r in self.c.execute(
-            "SELECT time_s FROM bars WHERE symbol=? AND seconds=?", (symbol, seconds))}
+        have = {
+            r["time_s"]
+            for r in self.c.execute(
+                "SELECT time_s FROM bars WHERE symbol=? AND seconds=?", (symbol, seconds)
+            )
+        }
         return [t for t in expected_open if t not in have]
 
     # --- snapshots, bundles, ledger -------------------------------------------------------
-    def record_data_snapshot(self, snapshot_id: str, description: str, symbol: str, seconds: int,
-                             start_s: int, end_s: int, n_bars: int) -> None:
+    def record_data_snapshot(
+        self,
+        snapshot_id: str,
+        description: str,
+        symbol: str,
+        seconds: int,
+        start_s: int,
+        end_s: int,
+        n_bars: int,
+    ) -> None:
         self.c.execute(
             "INSERT OR IGNORE INTO data_snapshots(snapshot_id, description, symbol, seconds, "
             "start_s, end_s, n_bars, created_ms) VALUES (?,?,?,?,?,?,?,?)",
             (snapshot_id, description, symbol, seconds, start_s, end_s, n_bars, now_ms()),
         )
 
-    def record_bundle(self, bundle_id: str, strategy_id: str, strategy_kind: str, params: dict,
-                      config_hash: str, parent: str | None = None, code_commit: str | None = None,
-                      prompt_hashes: dict | None = None, model_ids: dict | None = None) -> None:
+    def record_bundle(
+        self,
+        bundle_id: str,
+        strategy_id: str,
+        strategy_kind: str,
+        params: dict,
+        config_hash: str,
+        parent: str | None = None,
+        code_commit: str | None = None,
+        prompt_hashes: dict | None = None,
+        model_ids: dict | None = None,
+    ) -> None:
         self.c.execute(
             "INSERT OR IGNORE INTO bundles(bundle_id, parent_bundle_id, code_commit, strategy_id, "
             "strategy_kind, params_json, prompt_hashes_json, model_ids_json, config_hash, "
             "created_ms) VALUES (?,?,?,?,?,?,?,?,?,?)",
-            (bundle_id, parent, code_commit, strategy_id, strategy_kind, _stable(params),
-             _stable(prompt_hashes or {}), _stable(model_ids or {}), config_hash, now_ms()),
+            (
+                bundle_id,
+                parent,
+                code_commit,
+                strategy_id,
+                strategy_kind,
+                _stable(params),
+                _stable(prompt_hashes or {}),
+                _stable(model_ids or {}),
+                config_hash,
+                now_ms(),
+            ),
         )
 
     def append_trial(self, **row: Any) -> int:
         """Append-only: there is deliberately no update or delete method (R-031)."""
-        cols = ["created_ms", "bundle_id", "change_type", "description", "data_snapshot_id",
-                "cost_model_json", "n_trades", "n_days", "sharpe", "sortino", "calmar",
-                "net_return_pct", "max_drawdown_pct", "worst_day_pct", "skew", "kurt", "pbo", "dsr",
-                "haircut_sr", "perm_p", "created_by", "status", "report_path"]
+        cols = [
+            "created_ms",
+            "bundle_id",
+            "change_type",
+            "description",
+            "data_snapshot_id",
+            "cost_model_json",
+            "n_trades",
+            "n_days",
+            "sharpe",
+            "sortino",
+            "calmar",
+            "net_return_pct",
+            "max_drawdown_pct",
+            "worst_day_pct",
+            "skew",
+            "kurt",
+            "pbo",
+            "dsr",
+            "haircut_sr",
+            "perm_p",
+            "created_by",
+            "status",
+            "report_path",
+        ]
         row.setdefault("created_ms", now_ms())
         if isinstance(row.get("cost_model_json"), dict):
             row["cost_model_json"] = _stable(row["cost_model_json"])
@@ -139,23 +230,49 @@ class Repo:
         return int(cur.lastrowid)
 
     def trial_count(self, since_ms: int = 0) -> int:
-        return int(self.c.execute(
-            "SELECT COUNT(*) FROM trial_ledger WHERE created_ms>=?", (since_ms,)).fetchone()[0])
+        return int(
+            self.c.execute(
+                "SELECT COUNT(*) FROM trial_ledger WHERE created_ms>=?", (since_ms,)
+            ).fetchone()[0]
+        )
 
     def trial_sharpes(self, since_ms: int = 0) -> list[float]:
-        return [r[0] for r in self.c.execute(
-            "SELECT sharpe FROM trial_ledger WHERE created_ms>=? AND sharpe IS NOT NULL",
-            (since_ms,))]
+        return [
+            r[0]
+            for r in self.c.execute(
+                "SELECT sharpe FROM trial_ledger WHERE created_ms>=? AND sharpe IS NOT NULL",
+                (since_ms,),
+            )
+        ]
 
-    def record_backtest_run(self, run_id: str, bundle_id: str, data_snapshot_id: str, profile: str,
-                            params: dict, metrics: dict | None, trades_path: str | None,
-                            equity_path: str | None, started_ms: int) -> None:
+    def record_backtest_run(
+        self,
+        run_id: str,
+        bundle_id: str,
+        data_snapshot_id: str,
+        profile: str,
+        params: dict,
+        metrics: dict | None,
+        trades_path: str | None,
+        equity_path: str | None,
+        started_ms: int,
+    ) -> None:
         self.c.execute(
             "INSERT OR REPLACE INTO backtest_runs(run_id, bundle_id, data_snapshot_id, profile, "
             "started_ms, finished_ms, params_json, metrics_json, trades_path, equity_path) "
             "VALUES (?,?,?,?,?,?,?,?,?,?)",
-            (run_id, bundle_id, data_snapshot_id, profile, started_ms, now_ms(), _stable(params),
-             _stable(metrics) if metrics is not None else None, trades_path, equity_path),
+            (
+                run_id,
+                bundle_id,
+                data_snapshot_id,
+                profile,
+                started_ms,
+                now_ms(),
+                _stable(params),
+                _stable(metrics) if metrics is not None else None,
+                trades_path,
+                equity_path,
+            ),
         )
 
     # --- ops ----------------------------------------------------------------------------

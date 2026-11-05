@@ -1,6 +1,7 @@
 """Session module: Exness XAUUSD schedule with US-DST shift, event calendar windows and the
 session-state resolver (R-002, R-006, KU-008). Pure code, no network, aware UTC datetimes only.
 """
+
 from goldtrader.session.calendar import (
     FOMC_YAML_PATH,
     Event,

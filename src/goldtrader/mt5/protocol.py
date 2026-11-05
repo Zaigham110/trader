@@ -16,6 +16,7 @@ Conventions shared by every implementation (docs/research/02_exness_mt5.md §1a)
 * A function the package would answer with `None` (no data, not connected) returns `None` here
   too; the caller consults `last_error()`.
 """
+
 from __future__ import annotations
 
 from datetime import datetime

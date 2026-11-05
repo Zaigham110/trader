@@ -1,4 +1,5 @@
 """Features: causality (truncation test), ATR, trend state, spread regime, vol regime, ranges."""
+
 from __future__ import annotations
 
 import math
@@ -26,9 +27,14 @@ from goldtrader.types import Bar
 T0 = 1_767_571_200  # 2026-01-05 00:00:00 UTC
 
 
-def make_frame(mids: list[float], seconds: int = 60, spread: float | list[float] = 0.2,
-               highs: list[float] | None = None, lows: list[float] | None = None,
-               start: int = T0) -> pd.DataFrame:
+def make_frame(
+    mids: list[float],
+    seconds: int = 60,
+    spread: float | list[float] = 0.2,
+    highs: list[float] | None = None,
+    lows: list[float] | None = None,
+    start: int = T0,
+) -> pd.DataFrame:
     """Bars with bid = mid - spread/2 and ask = mid + spread/2; H/L default to the close."""
     spreads = [spread] * len(mids) if isinstance(spread, (int, float)) else list(spread)
     highs = highs or mids
@@ -36,10 +42,21 @@ def make_frame(mids: list[float], seconds: int = 60, spread: float | list[float]
     bars = []
     for i, (m, s, h, lo) in enumerate(zip(mids, spreads, highs, lows)):
         half = s / 2
-        bars.append(Bar(time=start + i * seconds, seconds=seconds,
-                        bid_open=m - half, bid_high=h - half, bid_low=lo - half, bid_close=m - half,
-                        ask_open=m + half, ask_high=h + half, ask_low=lo + half, ask_close=m + half,
-                        ticks=1))
+        bars.append(
+            Bar(
+                time=start + i * seconds,
+                seconds=seconds,
+                bid_open=m - half,
+                bid_high=h - half,
+                bid_low=lo - half,
+                bid_close=m - half,
+                ask_open=m + half,
+                ask_high=h + half,
+                ask_low=lo + half,
+                ask_close=m + half,
+                ticks=1,
+            )
+        )
     return bars_to_frame(bars)
 
 
@@ -53,7 +70,7 @@ def _same(a, b) -> bool:
 
 @pytest.fixture(scope="module")
 def synthetic_features() -> tuple[pd.DataFrame, pd.DataFrame]:
-    df = generate_bars(datetime(2026, 1, 5, tzinfo=UTC), 3, seed=11)   # ~3 trading days of 1m bars
+    df = generate_bars(datetime(2026, 1, 5, tzinfo=UTC), 3, seed=11)  # ~3 trading days of 1m bars
     return df, add_features(df, spread_hist_days=1)
 
 
@@ -67,8 +84,9 @@ def test_every_feature_is_causal_under_truncation(synthetic_features, k):
         assert _same(full[col].iloc[k], part[col].iloc[k]), (col, k)
     # donchian and session ranges too
     pd.testing.assert_frame_equal(donchian(df, 20).iloc[: k + 1], donchian(df.iloc[: k + 1], 20))
-    pd.testing.assert_frame_equal(session_high_low(df, 0, 7).iloc[: k + 1],
-                                  session_high_low(df.iloc[: k + 1], 0, 7))
+    pd.testing.assert_frame_equal(
+        session_high_low(df, 0, 7).iloc[: k + 1], session_high_low(df.iloc[: k + 1], 0, 7)
+    )
 
 
 def test_shifted_history_leaves_the_past_untouched(synthetic_features):
@@ -76,8 +94,16 @@ def test_shifted_history_leaves_the_past_untouched(synthetic_features):
     df, full = synthetic_features
     cut = len(df) - 100
     wild = df.iloc[cut:].copy()
-    for c in ("bid_open", "bid_high", "bid_low", "bid_close",
-              "ask_open", "ask_high", "ask_low", "ask_close"):
+    for c in (
+        "bid_open",
+        "bid_high",
+        "bid_low",
+        "bid_close",
+        "ask_open",
+        "ask_high",
+        "ask_low",
+        "ask_close",
+    ):
         wild[c] = wild[c] * 1.25
     altered = add_features(pd.concat([df.iloc[:cut], wild]), spread_hist_days=1)
     for col in FEATURE_COLUMNS:
@@ -85,8 +111,9 @@ def test_shifted_history_leaves_the_past_untouched(synthetic_features):
         if a.dtype == object or str(a.dtype) in ("str", "string"):
             assert (a.to_numpy() == b.to_numpy()).all(), col
         else:
-            np.testing.assert_allclose(a.to_numpy(dtype=float), b.to_numpy(dtype=float),
-                                       rtol=0, atol=1e-12, err_msg=col)
+            np.testing.assert_allclose(
+                a.to_numpy(dtype=float), b.to_numpy(dtype=float), rtol=0, atol=1e-12, err_msg=col
+            )
 
 
 def test_wilder_atr_on_known_series():
@@ -97,22 +124,29 @@ def test_wilder_atr_on_known_series():
     df = make_frame(closes, highs=highs, lows=lows)
     f = add_features(df, atr_period=3, ema_fast=2, ema_slow=3, rv_window=2, spread_hist_days=1)
     # true ranges by hand: bar0 H-L; then max(H-L, |H-pc|, |L-pc|)
-    tr = [1.0, max(1.5, 1.5, 0.0), max(1.5, 1.5, 0.0), max(1.5, 0.5, 1.0),
-          max(2.0, 2.0, 0.0), max(1.0, 0.0, 1.0)]
+    tr = [
+        1.0,
+        max(1.5, 1.5, 0.0),
+        max(1.5, 1.5, 0.0),
+        max(1.5, 0.5, 1.0),
+        max(2.0, 2.0, 0.0),
+        max(1.0, 0.0, 1.0),
+    ]
     assert np.allclose(f["tr"], tr)
-    atr2 = sum(tr[:3]) / 3                      # Wilder seed = SMA of the first n true ranges
+    atr2 = sum(tr[:3]) / 3  # Wilder seed = SMA of the first n true ranges
     atr3 = (atr2 * 2 + tr[3]) / 3
     atr4 = (atr3 * 2 + tr[4]) / 3
     atr5 = (atr4 * 2 + tr[5]) / 3
     assert f["atr"].iloc[:2].isna().all()
     assert np.allclose(f["atr"].iloc[2:], [atr2, atr3, atr4, atr5])
-    assert np.allclose(f["atr_pct"].iloc[2:], np.array([atr2, atr3, atr4, atr5]) / np.array(
-        closes[2:]))
+    assert np.allclose(
+        f["atr_pct"].iloc[2:], np.array([atr2, atr3, atr4, atr5]) / np.array(closes[2:])
+    )
     assert wilder_atr(pd.Series([], dtype=float), 3).empty
 
 
 def test_trend_state_logic():
-    up = list(np.linspace(100, 130, 80))          # steadily rising: fast > slow and mid > fast
+    up = list(np.linspace(100, 130, 80))  # steadily rising: fast > slow and mid > fast
     down = list(np.linspace(130, 100, 80))
     flat = [100.0] * 80
     f_up = add_features(make_frame(up), ema_fast=5, ema_slow=10, spread_hist_days=1)
@@ -134,10 +168,15 @@ def test_spread_median_hour_and_spread_regime_with_hourly_bars():
     # one bar per hour (bar_seconds=3600) for three days; day 2 hour 10 is wide
     mids = [100.0] * 72
     spreads = [0.2] * 72
-    spreads[24 + 10] = 0.5     # day 2, 10:00 → 2.5 × median of the prior day's 10:00 bar
-    spreads[48 + 10] = 0.39    # day 3, 10:00 → median of {0.2, 0.5} = 0.35 → 0.39 <= 0.70 normal
-    f = add_features(make_frame(mids, seconds=3600, spread=spreads), ema_fast=2, ema_slow=3,
-                     rv_window=2, spread_hist_days=2)
+    spreads[24 + 10] = 0.5  # day 2, 10:00 → 2.5 × median of the prior day's 10:00 bar
+    spreads[48 + 10] = 0.39  # day 3, 10:00 → median of {0.2, 0.5} = 0.35 → 0.39 <= 0.70 normal
+    f = add_features(
+        make_frame(mids, seconds=3600, spread=spreads),
+        ema_fast=2,
+        ema_slow=3,
+        rv_window=2,
+        spread_hist_days=2,
+    )
     assert f["hour_utc"].tolist() == list(range(24)) * 3
     assert np.allclose(f["spread_pips"].iloc[:3], 20.0)
     # day 1: no same-hour history → unknown
@@ -153,8 +192,13 @@ def test_spread_median_hour_and_spread_regime_with_hourly_bars():
     # exactly 2× the median is still normal (<=)
     spreads2 = [0.2] * 48
     spreads2[24 + 5] = 0.4
-    f2 = add_features(make_frame(mids[:48], seconds=3600, spread=spreads2), ema_fast=2,
-                      ema_slow=3, rv_window=2, spread_hist_days=2)
+    f2 = add_features(
+        make_frame(mids[:48], seconds=3600, spread=spreads2),
+        ema_fast=2,
+        ema_slow=3,
+        rv_window=2,
+        spread_hist_days=2,
+    )
     assert f2["spread_regime"].iloc[24 + 5] == "normal"
 
 
@@ -181,7 +225,7 @@ def test_volatility_regime_labels_from_daily_equivalent_atr():
     assert label(normal_rng) == "normal"
     assert label(stress_rng) == "stress"
     f = add_features(frame_with_range(normal_rng), spread_hist_days=1)
-    assert (f["regime"].iloc[:13] == "unknown").all()      # ATR(14) needs 14 bars
+    assert (f["regime"].iloc[:13] == "unknown").all()  # ATR(14) needs 14 bars
     assert f["atr_pct_daily"].iloc[-1] == pytest.approx(f["atr_pct"].iloc[-1] * math.sqrt(bpd))
     # 2% daily-equivalent (Nov-2026 reference, 01_gold_trading §3) is 'normal'
     assert label(price * 0.02 / math.sqrt(bpd)) == "normal"
@@ -195,7 +239,7 @@ def test_realised_vol_scaling_and_percentiles():
     f = add_features(make_frame(mids), rv_window=20, spread_hist_days=1)
     expected = np.std([r, -r] * 10, ddof=1) * math.sqrt(bars_per_year(60))
     assert f["rv"].iloc[20:].to_numpy() == pytest.approx(expected, rel=1e-9)
-    assert f["rv"].iloc[:20].isna().all()      # 20 returns need 21 bars (first log_ret is NaN)
+    assert f["rv"].iloc[:20].isna().all()  # 20 returns need 21 bars (first log_ret is NaN)
     assert f["log_ret"].iloc[1] == pytest.approx(logp[1] - logp[0])
     assert f["rv_pctile"].dropna().between(0, 1).all()
     assert f["atr_pctile"].dropna().between(0, 1).all()
@@ -216,7 +260,7 @@ def test_session_high_low_asian_range():
     # hourly bars over two days; highs/lows differ from close
     n = 48
     mids = [100.0] * n
-    highs = [100.0 + (i % 24) for i in range(n)]          # hour h has high 100 + h
+    highs = [100.0 + (i % 24) for i in range(n)]  # hour h has high 100 + h
     lows = [100.0 - (i % 24) for i in range(n)]
     df = make_frame(mids, seconds=3600, highs=highs, lows=lows)
     s = session_high_low(df, 0, 7)
@@ -231,9 +275,9 @@ def test_session_high_low_asian_range():
     assert s["session_high"].iloc[24] == 100.0 and s["session_high"].iloc[24 + 7] == 106.0
     # a window wrapping midnight (22 → 02) belongs to the day it ends on
     w = session_high_low(df, 22, 2)
-    assert w["session_high"].iloc[0] == 100.0              # day 1: only the 00:00 bar so far
-    assert w["session_high"].iloc[1] == 101.0              # 00:00 (100) and 01:00 (101) so far
-    assert w["session_high"].iloc[24 + 1] == 123.0         # day 2 includes day 1 22:00/23:00 bars
+    assert w["session_high"].iloc[0] == 100.0  # day 1: only the 00:00 bar so far
+    assert w["session_high"].iloc[1] == 101.0  # 00:00 (100) and 01:00 (101) so far
+    assert w["session_high"].iloc[24 + 1] == 123.0  # day 2 includes day 1 22:00/23:00 bars
     assert w["session_complete"].iloc[24 + 2] and not w["session_complete"].iloc[24 + 1]
 
 

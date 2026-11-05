@@ -23,6 +23,7 @@ defaulting to the verified 23:01:30 (winter).
 All public methods take timezone-aware datetimes and reject naive ones. Aware non-UTC datetimes
 are converted to UTC.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -161,16 +162,23 @@ class Schedule:
         if weekday == 5:  # Saturday
             return [Segment(0, c)]
         if weekday == 6:  # Sunday
-            segs = [Segment(0, c), Segment(self._sunday_close_only + sh, co),
-                    Segment(self._sunday_open + sh, o)]
+            segs = [
+                Segment(0, c),
+                Segment(self._sunday_close_only + sh, co),
+                Segment(self._sunday_open + sh, o),
+            ]
         elif weekday == 4:  # Friday
-            segs = [Segment(max(0, self._weekday_open + sh), o),
-                    Segment(self._friday_close + sh, c)]
+            segs = [
+                Segment(max(0, self._weekday_open + sh), o),
+                Segment(self._friday_close + sh, c),
+            ]
         else:  # Mon-Thu
-            segs = [Segment(max(0, self._weekday_open + sh), o),
-                    Segment(self._weekday_close + sh, c),
-                    Segment(self._close_only_start + sh, co),
-                    Segment(self._reopen + sh, o)]
+            segs = [
+                Segment(max(0, self._weekday_open + sh), o),
+                Segment(self._weekday_close + sh, c),
+                Segment(self._close_only_start + sh, co),
+                Segment(self._reopen + sh, o),
+            ]
         if segs[0].start > 0:
             segs.insert(0, Segment(0, c))
         return [s for s in segs if 0 <= s.start < SECONDS_PER_DAY]
@@ -254,5 +262,7 @@ class Schedule:
             return None
         start = datetime.combine(d, time(0), tzinfo=UTC)
         sh = self._shift(self.is_dst(start + timedelta(hours=12)))
-        return (start + timedelta(seconds=self._maint_start + sh),
-                start + timedelta(seconds=self._maint_end + sh))
+        return (
+            start + timedelta(seconds=self._maint_start + sh),
+            start + timedelta(seconds=self._maint_end + sh),
+        )

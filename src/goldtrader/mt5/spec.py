@@ -7,6 +7,7 @@ changes between startup and the daily re-read. `find_gold_symbol` resolves the a
 gold symbol (KU-019) and `derive_money` reproduces the money math of
 docs/MT5_EXNESS_INTEGRATION.md §2.
 """
+
 from __future__ import annotations
 
 from dataclasses import fields
@@ -31,8 +32,10 @@ def read_spec(client: MT5Client, symbol: str) -> SymbolSpec:
 def diff_specs(old: SymbolSpec, new: SymbolSpec) -> list[str]:
     """Names of the fields whose value differs (declaration order; `spread` is ignored)."""
     return [
-        f.name for f in fields(SymbolSpec)
-        if f.name != "CRITICAL" and f.name not in VOLATILE_FIELDS
+        f.name
+        for f in fields(SymbolSpec)
+        if f.name != "CRITICAL"
+        and f.name not in VOLATILE_FIELDS
         and getattr(old, f.name) != getattr(new, f.name)
     ]
 
