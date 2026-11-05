@@ -1,6 +1,6 @@
 # goldtrader — AI gold (XAUUSD) trading system for Exness via MetaTrader 5
 
-Status: Phase 3 (data pipeline, MT5 integration, backtesting). Documentation is the source of
+Status: Phase 4 complete on Linux (bots and risk engine); Phase 5 (Anthropic provider, chat bot) next. Documentation is the source of
 truth: start with `docs/00_PROJECT_BRIEF.md`, then `docs/README.md`.
 
 Nothing here trades live. Phase 8 (limited live) requires the criteria in `docs/TEST_PLAN.md` and
@@ -53,6 +53,9 @@ orders on a real account unless `--allow-real` is passed.
 | `goldctl backtest --data data/bars/synthetic_1m.parquet --db state/research.sqlite` | One strategy, metrics net of costs, offline-gate report |
 | `goldctl sweep --grid "stop_atr=0.6,1.0;target_atr=1.0,1.5"` | Parameter sweep → trial ledger → gate with PBO on the best run |
 | `goldctl mt5-tests --fake` | The MT5-T00…T16 suite against the in-memory FakeMT5 |
+| `goldctl gateway --fake` / `--real` | Gateway process: MT5 polling, risk engine, execution, reconciliation, loopback API |
+| `goldctl brain --provider fake` | Brain process: scheduler, bots, decision cycle, trade review, Telegram alerts |
+| `goldctl secret-set MT5_PASSWORD` | Store a secret in the OS credential store (never in files) |
 
 ## Layout
 

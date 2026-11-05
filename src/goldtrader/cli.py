@@ -366,6 +366,77 @@ def gateway(
             svc.stop()
 
 
+@app.command("brain")
+def brain(
+    config: Path = typer.Option(Path("config/demo.yaml")),
+    db: Path = typer.Option(Path("state/demo.sqlite")),
+    gateway_url: str = "http://127.0.0.1:8750",
+    provider: str = typer.Option("fake", help="fake | anthropic (Phase 5)"),
+    minutes: float | None = None,
+) -> None:
+    """Run the brain process: scheduler, bots, decision cycle, trade review, alerts."""
+    import logging
+    import threading
+
+    from goldtrader.brain.service import BrainService
+    from goldtrader.gateway.api import GatewayClient
+    from goldtrader.llm.fake import FakeProvider
+    from goldtrader.notify.redact import install as install_redaction
+    from goldtrader.notify.telegram import HttpTelegramSender
+    from goldtrader.process.exitlog import ExitLog
+    from goldtrader.process.lock import acquire
+    from goldtrader.secrets import all_secret_values, get_secret
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    install_redaction(logging.getLogger(), all_secret_values())
+    cfg = _load(config)
+    state_dir = Path(cfg.data.db_dir)
+    ExitLog(state_dir / "brain.exit.log").install("brain")
+    with acquire("brain", state_dir):
+        conn = connect(db)
+        migrate(conn)
+        repo = Repo(conn)
+        token = get_secret("GATEWAY_TOKEN", required=False)
+        if token is None and (state_dir / "gateway.token").exists():
+            token = (state_dir / "gateway.token").read_text().strip()
+        if token is None:
+            typer.echo(
+                "no GATEWAY_TOKEN and no state/gateway.token; start the gateway first", err=True
+            )
+            raise typer.Exit(code=2)
+        if provider == "fake":
+            model: object | None = FakeProvider()
+            typer.echo("provider=fake: bots return their deterministic fallbacks (D-031)", err=True)
+        elif provider == "none":
+            model = None
+        else:
+            typer.echo(
+                "the Anthropic provider arrives in Phase 5 (D-031); use --provider fake", err=True
+            )
+            raise typer.Exit(code=2)
+        sender = None
+        chat_id = get_secret("TELEGRAM_OWNER_CHAT_ID", required=False)
+        tg_token = get_secret("TELEGRAM_BOT_TOKEN", required=False)
+        if chat_id and tg_token:
+            sender = HttpTelegramSender(tg_token)
+        svc = BrainService(
+            cfg,
+            repo,
+            GatewayClient(gateway_url, token),
+            model,  # type: ignore[arg-type]
+            sender=sender,
+            owner_chat_id=int(chat_id) if chat_id else None,
+        )
+        typer.echo(
+            f"brain up: strategy={svc.strat.id} gateway={gateway_url} alerts="
+            f"{'telegram' if sender else 'off'}"
+        )
+        stop = threading.Event()
+        if minutes:
+            threading.Timer(minutes * 60, stop.set).start()
+        svc.run(stop)
+
+
 @app.command("secret-set")
 def secret_set(name: str) -> None:
     """Store a secret in the OS credential store (prompts; the value is never echoed)."""

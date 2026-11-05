@@ -69,6 +69,9 @@ tools[], output_schema, checks(), finalize(), timeout_s, max_turns, max_cost_usd
 - **Output schema:** `{action: wait|enter|exit|move_stop, side?: long|short, stop_atr?: number,
   target_atr?: number, confidence: 0–1, thesis ≥ 20 chars, invalidation ≥ 10 chars, horizon_minutes:
   15–480, agrees_with_signal: bool}`.
+- **Normalisation before gating (D-033):** code overrides `agrees_with_signal` with the truth and
+  clips `stop_atr`/`target_atr` into the stricter of strategy and owner bounds; the raw proposal is
+  journaled.
 - **Code gates (`gate_entry`):** action `enter` requires the deterministic signal to agree unless
   `strategy.allow_discretionary = true` (default false); `stop_atr` within configured bounds (default
   0.3–1.5); `target_atr ≥ stop_atr × min_rr` (default 1.0); confidence ≥ threshold (default 0.6);

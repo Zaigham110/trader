@@ -125,6 +125,8 @@ class GatewayClient:
                 return json.loads(resp.read().decode())
         except urllib.error.HTTPError as e:
             return {"error": f"http_{e.code}", "detail": e.read().decode(errors="replace")}
+        except (urllib.error.URLError, OSError, ValueError) as e:  # refused, timeout, bad JSON
+            return {"error": "unreachable", "detail": str(e)}
 
     def state(self) -> GatewayState | None:
         d = self._call("GET", "/state")

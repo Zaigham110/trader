@@ -52,6 +52,11 @@ of each parameter), DST-shift sensitivity (±1 h), bull/bear/range window breakd
   machinery is what is tested).
 
 ### Phase 4 exit (bots and risk engine)
+- Status 2026-11-05: delivered on Linux against `FakeMT5` and `FakeProvider`. Risk-engine property
+  test (20,000 cases) passes; static isolation tests prove the bots cannot import MT5, execution or
+  gateway state; end-to-end tests drive proposal → gates → loopback API → risk engine → FakeMT5
+  fill → broker-side target → reconciler → journal → review bot. The demo run with 10 labelled
+  trades requires the owner's PC and is carried into Phase 7.
 - Risk engine property test (≥ 20,000 cases) passes for both profiles; static safety tests pass.
 - Fake-MT5 integration: every failure path in `ARCHITECTURE.md` §5 has a test.
 - End-to-end on demo: 10 labelled test trades through proposal → gates → intent → order → fill →
