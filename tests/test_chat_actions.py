@@ -47,7 +47,7 @@ def test_prepare_pause_creates_pending_confirmation_and_executes_nothing():
     assert a.status == "pending" and a.kind == "pause" and a.chat_id == OWNER
     assert a.expires_ms == NOW + 120_000
     assert a.token not in p.summary and a.token not in a.params_json
-    assert "Reason: lunch b break /b" in p.summary  # defanged
+    assert "Reason: lunch break" in p.summary and "<b>" not in p.summary  # defanged
     rows = a.buttons()
     assert [b.text for b in rows[0]] == ["Confirm", "Cancel"]
     assert gw.intents == []  # nothing executed
@@ -104,7 +104,10 @@ def test_set_config_value_refuses_owner_keys(tmp_path):
     conn, gw, clock, ctx = _ctx(tmp_path)
     with pytest.raises(ActionError) as e:
         prepare_action(
-            ctx, "set_config_value", {"key": "owner.risk.daily_loss_pct", "value": 4.0}, chat_id=OWNER
+            ctx,
+            "set_config_value",
+            {"key": "owner.risk.daily_loss_pct", "value": 4.0},
+            chat_id=OWNER,
         )
     assert str(e.value) == OWNER_ONLY_REASON
     with pytest.raises(ActionError):
@@ -121,7 +124,10 @@ def test_set_config_value_invalid_rejected_before_button(tmp_path):
     # below the ceiling floor (min_pre_break_buffer_min = 5)
     with pytest.raises(ActionError, match="rejected by the config schema"):
         prepare_action(
-            ctx, "set_config_value", {"key": "session.pre_break_buffer_min", "value": 1}, chat_id=OWNER
+            ctx,
+            "set_config_value",
+            {"key": "session.pre_break_buffer_min", "value": 1},
+            chat_id=OWNER,
         )
     # wrong type
     with pytest.raises(ActionError, match="rejected by the config schema"):
@@ -135,7 +141,9 @@ def test_set_config_value_invalid_rejected_before_button(tmp_path):
     with pytest.raises(ActionError):
         prepare_action(ctx, "set_config_value", {"key": "session.nope", "value": 1}, chat_id=OWNER)
     with pytest.raises(ActionError, match="needs key and value"):
-        prepare_action(ctx, "set_config_value", {"key": "session.stale_tick_seconds"}, chat_id=OWNER)
+        prepare_action(
+            ctx, "set_config_value", {"key": "session.stale_tick_seconds"}, chat_id=OWNER
+        )
     assert ctx.confirm.list_pending() == []
 
 
@@ -144,7 +152,10 @@ def test_set_config_value_rewrites_yaml_atomically_and_records_version(tmp_path)
     path = tmp_path / "demo.yaml"
     before_hash = config_hash(ctx.cfg)
     p = prepare_action(
-        ctx, "set_config_value", {"key": "session.pre_break_buffer_min", "value": "10"}, chat_id=OWNER
+        ctx,
+        "set_config_value",
+        {"key": "session.pre_break_buffer_min", "value": "10"},
+        chat_id=OWNER,
     )
     assert "session.pre_break_buffer_min: 15 → 10" in p.summary
     assert before_hash in p.summary
@@ -159,9 +170,7 @@ def test_set_config_value_rewrites_yaml_atomically_and_records_version(tmp_path)
     new_cfg = load_config(path)
     assert new_cfg.session.pre_break_buffer_min == 10
     assert config_hash(new_cfg) in line and config_hash(new_cfg) != before_hash
-    rows = conn.execute(
-        "SELECT config_hash, source FROM config_versions ORDER BY id"
-    ).fetchall()
+    rows = conn.execute("SELECT config_hash, source FROM config_versions ORDER BY id").fetchall()
     assert [(r["config_hash"], r["source"]) for r in rows] == [(config_hash(new_cfg), "telegram")]
     assert gw.intents == []
     assert not list(tmp_path.glob(".demo.yaml.*"))  # no temp file left behind
@@ -179,7 +188,9 @@ def test_set_config_value_without_config_path_fails_at_execution_only():
 def test_prepare_action_tool_returns_errors_as_data():
     conn, gw, clock, ctx = _ctx()
     tool = prepare_action_tool(ctx, lambda: OWNER)
-    out = tool.handler({"type": "set_config_value", "params": {"key": "owner.mode", "value": "live"}})
+    out = tool.handler(
+        {"type": "set_config_value", "params": {"key": "owner.mode", "value": "live"}}
+    )
     assert out["status"] == "refused" and "owner-only" in out["error"]
     out = tool.handler({"type": "pause", "params": {}})
     assert out["status"] == "pending_confirmation" and out["action_id"] in ctx.prepared

@@ -526,8 +526,7 @@ class ChatService:
                 return "callback:cancel:unknown"
             self._edit_away(chat_id, message_id or action.message_id)
             self._answer(cb_id, "Cancelled.")
-            status = "cancelled" if action.status == "cancelled" else action.status
-            self._send(chat_id, f"Cancelled ({status}): {action.summary} Nothing was done.")
+            self._send(chat_id, f"Cancelled ({action.status}): {action.summary} Nothing was done.")
             return "callback:cancelled"
 
         assert token is not None
