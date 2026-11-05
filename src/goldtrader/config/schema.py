@@ -158,10 +158,60 @@ class RiskLimits(Frozen):
     kill_on_disconnect_min: int = 5
 
 
+class LearningGates(Frozen):
+    """Promotion gates (LEARNING_SYSTEM.md §3–§4). Owner-only, not learnable (D-045).
+
+    Field names are shared with `goldtrader.learning.gates` (pipeline) and
+    `goldtrader.learning.monitors` (production monitors). Every default is an Assumption until
+    demo data exists.
+    """
+
+    # §3.1 intake
+    max_proposals_per_week: int = 10
+    # §3.2 offline gate
+    spread_multiplier: float = 1.5
+    offline_min_trades: int = 100
+    offline_min_days: int = 120
+    offline_min_sharpe: float = 0.8
+    offline_max_pbo: float = 0.05
+    offline_min_dsr: float = 0.95
+    offline_min_haircut_sr: float = 0.5
+    offline_max_perm_p: float = 0.05
+    offline_fdr: float = 0.10
+    min_sharpe_gain: float = 0.1
+    # §3.3 demo and shadow
+    demo_min_days: int = 60
+    demo_min_trades: int = 100
+    shadow_min_days: int = 30
+    shadow_min_trades: int = 50
+    shadow_max_slippage_ratio: float = 1.25
+    # §3.4 limited live and promotion (D-047)
+    live_min_days: int = 90
+    live_min_trades: int = 100
+    evalue_threshold: float = 20.0
+    evalue_bet_cap: float = 0.5
+    challenger_share: float = 0.25
+    max_experiment_days: int = 180
+    # §3.5 rollback
+    rollback_window_days: int = 30
+    # §4 production monitors
+    monitor_min_trades: int = 50
+    monitor_cusum_k_sigma: float = 0.5
+    monitor_cusum_h_sigma: float = 4.0
+    monitor_sharpe_window_trades: int = 100
+    monitor_mc_pause_pctile: float = 95.0
+    monitor_mc_retire_pctile: float = 99.0
+    monitor_pchart_sigma: float = 3.0
+    monitor_fill_drift_ratio: float = 1.5
+    monitor_fill_drift_trades: int = 50
+    monitor_repause_days: int = 90
+
+
 class OwnerConfig(Frozen):
     """Owner-only section. Bots have no write path (R-010, R-034)."""
 
     profile: Profile = "normal"
+    learning: LearningGates = LearningGates()
     mode: Literal["shadow", "demo", "live"] = "demo"
     risk: RiskLimits = RiskLimits()
     prohibited_logic: tuple[str, ...] = ("martingale", "grid", "averaging_down")

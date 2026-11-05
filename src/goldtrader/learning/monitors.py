@@ -54,7 +54,8 @@ STATE_MONITOR = "bundle_state"
 
 @dataclass(frozen=True)
 class MonitorGates:
-    """LEARNING_SYSTEM §4 defaults; the same field names as ``LearningGates.monitor_*``."""
+    """LEARNING_SYSTEM §4 / research §3.2 defaults; the field names are those of
+    ``LearningGates.monitor_*`` (``owner.learning``), so either object can be passed as ``gates``."""
 
     monitor_min_trades: int = 50
     monitor_cusum_k_sigma: float = 0.5
@@ -66,6 +67,9 @@ class MonitorGates:
     monitor_fill_drift_ratio: float = 1.5
     monitor_fill_drift_trades: int = 50
     monitor_repause_days: int = 90
+
+
+_DEFAULTS = MonitorGates()
 
 
 @dataclass(frozen=True)
@@ -118,8 +122,8 @@ class Monitors:
         self.seed = seed
 
     def _g(self, name: str) -> Any:
-        default = getattr(MonitorGates(), name)
-        return getattr(self.gates, name, default)
+        """Gate value by name: the configured gates object, else the §4 default."""
+        return getattr(self.gates, name, getattr(_DEFAULTS, name))
 
     # --- state -----------------------------------------------------------------------------
     def status(self, bundle_id: str) -> str:
@@ -195,7 +199,11 @@ class Monitors:
         if n < min_n:
             results = [
                 MonitorResult(
-                    "sample", "info", float(n), float(min_n), f"insufficient_sample: n={n} < {min_n}"
+                    "sample",
+                    "info",
+                    float(n),
+                    float(min_n),
+                    f"insufficient_sample: n={n} < {min_n}",
                 )
             ]
         else:
@@ -289,7 +297,9 @@ class Monitors:
         ref = np.asarray(backtest_pnls, float)
         p0 = float(np.mean(ref > 0))
         if not 0.0 < p0 < 1.0:
-            return MonitorResult("pchart", "info", None, None, f"reference_hit_rate_degenerate {p0}")
+            return MonitorResult(
+                "pchart", "info", None, None, f"reference_hit_rate_degenerate {p0}"
+            )
         n = int(pnls.size)
         wins = int(np.sum(pnls > 0))
         res = hit_rate_pchart(
@@ -375,7 +385,9 @@ class Monitors:
             window_ms = int(self._g("monitor_repause_days")) * 86_400_000
             if self._recent_pauses(bundle_id, now - window_ms, now) > 0:
                 level = "retire"
-                culprits = f"{culprits} (second pause within {self._g('monitor_repause_days')} days)"
+                culprits = (
+                    f"{culprits} (second pause within {self._g('monitor_repause_days')} days)"
+                )
         new_status = "retired" if level == "retire" else "paused"
         self._set_state(bundle_id, new_status, now, culprits)
         self._event(

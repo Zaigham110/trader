@@ -13,11 +13,9 @@ from __future__ import annotations
 
 import functools
 from collections.abc import Callable
-from typing import Any, TypeVar
+from typing import Any
 
 from goldtrader.config.loader import owner_hash
-
-F = TypeVar("F", bound=Callable[..., Any])
 
 
 def assert_owner_untouched(cfg_before_hash: str, cfg_after_hash: str) -> None:
@@ -42,7 +40,7 @@ class OwnerGuard:
         return h
 
 
-def guard(fn: F) -> F:
+def guard[F: Callable[..., Any]](fn: F) -> F:
     """Method decorator for objects with a `cfg` attribute: the owner hash of `self.cfg` must be
     the same before and after the call, and must equal the hash pinned by `self._owner_guard`
     when the object has one. Wrap `advance` / `promote` / `rollback` with it."""

@@ -42,7 +42,7 @@ import sqlite3
 from collections import deque
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pandas as pd
@@ -52,8 +52,10 @@ from goldtrader.backtest.strategies import Strategy, build_strategy
 from goldtrader.config.schema import Config
 from goldtrader.data.features import add_features
 from goldtrader.data.resample import bars_to_frame
-from goldtrader.gateway.market import LiveFeatures
 from goldtrader.types import Bar, SessionState
+
+if TYPE_CHECKING:  # annotation only: the ledger must not import the gateway package (D-047)
+    from goldtrader.gateway.market import LiveFeatures
 
 FLATTEN_STATES: frozenset[SessionState] = frozenset(
     {
@@ -245,8 +247,11 @@ class ShadowLedger:
         """
         b = self._as_bar(bar)
         state = self._state(session_state)
-        frame = self._frame_for(b)
-        if frame is None or frame.empty:
+        due = [
+            bd for bd in self._bundles.values() if bd.last_bar_s is None or b.time > bd.last_bar_s
+        ]
+        frame = self._frame_for(b, compute=bool(due))
+        if not due or frame is None or frame.empty:
             return []
         missing = REQUIRED_COLUMNS - set(frame.columns)
         if missing:
@@ -255,9 +260,7 @@ class ShadowLedger:
             raise ValueError("frame_provider's last row is not the bar just closed")
         row = frame.iloc[-1]
         events: list[dict[str, Any]] = []
-        for bd in self._bundles.values():
-            if bd.last_bar_s is not None and b.time <= bd.last_bar_s:
-                continue
+        for bd in due:
             bd.last_bar_s = b.time
             self._step(bd, b, frame, row, features, state, bool(entries_allowed), events)
         return events
@@ -462,15 +465,15 @@ class ShadowLedger:
         bd.position = None
 
     # --- frames ----------------------------------------------------------------------------
-    def _frame_for(self, b: Bar) -> pd.DataFrame | None:
+    def _frame_for(self, b: Bar, compute: bool = True) -> pd.DataFrame | None:
+        """The features frame ending at ``b``: the provider's, or the ledger's own trailing bars
+        (a replayed or out-of-order bar leaves them unchanged). ``compute=False`` only records
+        the bar."""
         if self.frame_provider is not None:
-            return self.frame_provider()
-        if self._bars and b.time <= self._bars[-1].time:
-            # replayed or out-of-order bar: keep the frame as it is
-            frame = bars_to_frame(list(self._bars))
-            return add_features(frame) if len(frame) >= 3 else None
-        self._bars.append(b)
-        if len(self._bars) < 3:
+            return self.frame_provider() if compute else None
+        if not self._bars or b.time > self._bars[-1].time:
+            self._bars.append(b)
+        if not compute or len(self._bars) < 3:
             return None
         return add_features(bars_to_frame(list(self._bars)))
 

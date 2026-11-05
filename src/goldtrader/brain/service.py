@@ -60,6 +60,48 @@ class BrainService:
             repo, cfg.account.symbol, self.strat, clock=lambda: self.clock_ms() / 1000.0
         )
         self._last_state = None
+        # learning (Phase 6): nightly job, shadow feed and the limited-live router (D-047)
+        from goldtrader.brain.learning_job import LearningJob
+        from goldtrader.types import SymbolSpec
+
+        spec = SymbolSpec(
+            name=cfg.account.symbol,
+            digits=2,
+            point=0.01,
+            trade_tick_size=0.01,
+            trade_tick_value=1.0,
+            trade_contract_size=100.0,
+            volume_min=0.01,
+            volume_max=200.0,
+            volume_step=0.01,
+            volume_limit=0.0,
+            trade_stops_level=0,
+            trade_freeze_level=0,
+            trade_mode=4,
+            trade_exemode=2,
+            filling_mode=3,
+            swap_mode=1,
+            swap_long=0.0,
+            swap_short=0.0,
+            swap_rollover3days=3,
+            margin_initial=0.0,
+            margin_hedged=0.0,
+            currency_base="XAU",
+            currency_profit="USD",
+            currency_margin="USD",
+            spread=20,
+            spread_float=True,
+        )
+        live_spec = repo.latest_spec(cfg.account.symbol)
+        self.learning = LearningJob(
+            cfg,
+            repo,
+            self.strat,
+            self.clock_ms,
+            spec=live_spec or spec,
+            frame_fn=lambda: self.feats._frame(),
+        )
+        self._last_shadow_bar: int | None = None
         self.cycle = DecisionCycle(
             cfg,
             self.strat,
@@ -136,6 +178,8 @@ class BrainService:
                 only_when=self._is_sunday,
             )
         )
+        self.scheduler.add(Job("learning", self._learning_job, daily_at_utc="23:30"))
+        self.scheduler.add(Job("shadow", self._shadow_job, every_seconds=60))
         self.scheduler.add(Job("review", self._review_job, every_seconds=60))
         self.scheduler.add(Job("alerts", self._alerts_job, every_seconds=10))
         self.scheduler.add(Job("heartbeat", self._heartbeat_job, every_seconds=10))
@@ -186,6 +230,26 @@ class BrainService:
         )
         self.registry.run("research", ctx)
         self.news_store.mark_processed([i["item_id"] for i in items], now)
+
+    def _learning_job(self) -> None:
+        self.learning.nightly()
+
+    def _shadow_job(self) -> None:
+        """Feed each newly closed 1-minute bar to the shadow ledger with the session state."""
+        if not self.learning.shadow.bundles():
+            return
+        df = self.feats._frame()
+        if df is None or df.empty:
+            return
+        last = df.iloc[-1]
+        t = int(last["time"])
+        if self._last_shadow_bar is not None and t <= self._last_shadow_bar:
+            return
+        self._last_shadow_bar = t
+        st = self._last_state or self.gateway.state()
+        session = st.session if st is not None else "CLOSED"
+        entries = bool(st.entries_allowed) if st is not None else False
+        self.learning.shadow.on_bar(last, self.feats.features(st), session, entries)
 
     def _is_sunday(self) -> bool:
         return datetime.fromtimestamp(self.clock_ms() / 1000, UTC).weekday() == 6

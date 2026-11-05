@@ -113,7 +113,9 @@ def _ledger_row(
     )
 
 
-def _metric_improved(metric: str, cand: Mapping[str, Any], champ: Mapping[str, Any]) -> tuple[bool, str]:
+def _metric_improved(
+    metric: str, cand: Mapping[str, Any], champ: Mapping[str, Any]
+) -> tuple[bool, str]:
     a, b = cand.get(metric), champ.get(metric)
     if a is None or b is None or not (np.isfinite(a) and np.isfinite(b)):
         return False, f"{metric}: unavailable"

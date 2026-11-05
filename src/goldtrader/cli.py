@@ -554,6 +554,59 @@ def eval_cmd(
             raise typer.Exit(code=1)
 
 
+@app.command("learn")
+def learn(
+    action: str = typer.Argument(
+        ..., help="status | nightly | unpause <bundle> | rollback <experiment>"
+    ),
+    target: str | None = typer.Argument(None),
+    config: Path = typer.Option(Path("config/demo.yaml")),
+    db: Path = typer.Option(Path("state/demo.sqlite")),
+) -> None:
+    """Learning system: show experiments, run the nightly job now, un-pause a bundle, roll back."""
+    from goldtrader.brain.features import DbFeatures
+    from goldtrader.brain.learning_job import LearningJob
+    from goldtrader.db.connect import now_ms
+
+    cfg = _load(config)
+    enabled = [s for s in cfg.strategies if s.enabled]
+    if not enabled:
+        typer.echo("no enabled strategy in config", err=True)
+        raise typer.Exit(code=1)
+    conn = connect(db)
+    migrate(conn)
+    repo = Repo(conn)
+    feats = DbFeatures(repo, cfg.account.symbol, enabled[0])
+    job = LearningJob(
+        cfg,
+        repo,
+        enabled[0],
+        now_ms,
+        spec=repo.latest_spec(cfg.account.symbol) or _default_spec(cfg.account.symbol),
+        frame_fn=feats._frame,
+    )
+    if action == "status":
+        typer.echo(json.dumps(job.status(), indent=2, default=str))
+    elif action == "nightly":
+        typer.echo(json.dumps(job.nightly(), indent=2, default=str))
+    elif action == "unpause":
+        if not target:
+            raise typer.BadParameter("bundle id required")
+        ok = job.monitors.unpause(target, actor="owner")
+        typer.echo("un-paused" if ok else "bundle was not paused")
+    elif action == "rollback":
+        if not target:
+            raise typer.BadParameter("experiment id required")
+        exp = job.store.get(target)
+        if exp is None:
+            typer.echo("unknown experiment", err=True)
+            raise typer.Exit(code=1)
+        dec = job.pipeline.rollback(exp, "owner command")
+        typer.echo(json.dumps(dec.as_dict(), indent=2, default=str))
+    else:
+        raise typer.BadParameter("action must be status | nightly | unpause | rollback")
+
+
 @app.command("secret-set")
 def secret_set(name: str) -> None:
     """Store a secret in the OS credential store (prompts; the value is never echoed)."""

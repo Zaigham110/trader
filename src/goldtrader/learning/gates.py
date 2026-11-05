@@ -78,6 +78,8 @@ def gates_for(cfg: Any, override: LearningGates | None = None) -> LearningGates:
         return LearningGates()
     if isinstance(section, LearningGates):
         return section
-    if isinstance(section, BaseModel):
-        return LearningGates.model_validate(section.model_dump())
-    return LearningGates.model_validate(dict(section))
+    data = section.model_dump() if isinstance(section, BaseModel) else dict(section)
+    # the schema section also carries the monitor_* fields; this model only needs its own keys
+    return LearningGates.model_validate(
+        {k: v for k, v in data.items() if k in LearningGates.model_fields}
+    )
