@@ -1,6 +1,6 @@
 # goldtrader — AI gold (XAUUSD) trading system for Exness via MetaTrader 5
 
-Status: Phase 6 complete on Linux (learning system); Phase 7 (demo trading on the owner's PC) next. Documentation is the source of
+Status: Phase 7 (demo trading on the owner's PC) in progress; see `docs/PHASE7_RUNBOOK.md`. Documentation is the source of
 truth: start with `docs/00_PROJECT_BRIEF.md`, then `docs/README.md`.
 
 Nothing here trades live. Phase 8 (limited live) requires the criteria in `docs/TEST_PLAN.md` and
@@ -64,6 +64,8 @@ logon and restart on failure; `scripts/windows/backup-db.ps1` is the nightly bac
 | `goldctl llm-check` | Ping each configured Claude model tier |
 | `goldctl eval headlines --provider anthropic --baseline reports/evals/<prev>.json` | Run an evaluation set and gate it against a baseline |
 | `goldctl learn status` / `nightly` / `unpause <bundle>` / `rollback <experiment>` | Learning system: experiments, run the nightly job now, owner un-pause, owner rollback |
+| `goldctl doctor` | Preflight: Python, MT5 package, config, secrets present, database |
+| `goldctl report --period week` | Phase 7 report: scorecard, go-live checklist, incidents, monitors, experiments |
 | `goldctl status` | Heartbeats, open incidents, kill switch, positions, last cycle, today's net P&L |
 | `goldctl secret-set MT5_PASSWORD` | Store a secret in the OS credential store (never in files) |
 

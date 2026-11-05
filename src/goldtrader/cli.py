@@ -607,6 +607,178 @@ def learn(
         raise typer.BadParameter("action must be status | nightly | unpause | rollback")
 
 
+@app.command("doctor")
+def doctor(
+    config: Path = typer.Option(Path("config/demo.yaml")),
+    db: Path = typer.Option(Path("state/demo.sqlite")),
+) -> None:
+    """Preflight for the owner's PC: Python, MT5 package, config, secrets (presence only), DB."""
+    import platform
+    import sys
+
+    from goldtrader.secrets import KNOWN, get_secret
+
+    rows: list[tuple[str, bool, str]] = []
+    rows.append(("python", sys.version_info >= (3, 12), platform.python_version()))
+    rows.append(("os", True, f"{platform.system()} {platform.release()}"))
+    try:
+        import MetaTrader5 as _mt5  # type: ignore[import-not-found]
+
+        rows.append(("MetaTrader5 package", True, getattr(_mt5, "__version__", "present")))
+    except Exception as e:  # noqa: BLE001
+        rows.append(
+            (
+                "MetaTrader5 package",
+                platform.system() != "Windows",
+                "missing (expected on Linux; required on the PC)"
+                if platform.system() != "Windows"
+                else f"missing: {e}",
+            )
+        )
+    try:
+        cfg = load_config(config)
+        rows.append(
+            (
+                "config",
+                True,
+                f"{config} profile={cfg.owner.profile} mode={cfg.owner.mode} "
+                f"symbol={cfg.account.symbol}",
+            )
+        )
+        if cfg.owner.mode == "live":
+            rows.append(
+                (
+                    "live mode",
+                    bool(get_secret("ALLOW_LIVE", required=False)),
+                    "ALLOW_LIVE phrase present"
+                    if get_secret("ALLOW_LIVE", required=False)
+                    else "ALLOW_LIVE missing (required for live)",
+                )
+            )
+    except ConfigError as e:
+        rows.append(("config", False, str(e)[:200]))
+    for name in KNOWN:
+        if name == "ALLOW_LIVE":
+            continue
+        present = get_secret(name, required=False) is not None
+        required = name in ("MT5_LOGIN", "MT5_PASSWORD", "MT5_SERVER")
+        rows.append(
+            (
+                f"secret {name}",
+                present or not required,
+                "present"
+                if present
+                else ("MISSING (required)" if required else "absent (optional)"),
+            )
+        )
+    try:
+        conn = connect(db)
+        v = migrate(conn)
+        rows.append(("database", True, f"{db} schema v{v}"))
+    except Exception as e:  # noqa: BLE001
+        rows.append(("database", False, f"{e}"[:200]))
+    try:
+        import keyring  # type: ignore[import-not-found]  # noqa: F401
+
+        rows.append(("keyring", True, "available"))
+    except Exception:  # noqa: BLE001
+        rows.append(("keyring", True, "not installed: secrets come from the environment only"))
+    width = max(len(r[0]) for r in rows)
+    bad = 0
+    for name, ok, detail in rows:
+        bad += 0 if ok else 1
+        typer.echo(f"{'OK  ' if ok else 'FAIL'} {name:<{width}}  {detail}")
+    typer.echo(f"{len(rows) - bad}/{len(rows)} checks passed")
+    if bad:
+        raise typer.Exit(code=1)
+
+
+@app.command("report")
+def report(
+    config: Path = typer.Option(Path("config/demo.yaml")),
+    db: Path = typer.Option(Path("state/demo.sqlite")),
+    period: str = typer.Option("all", help="today | week | month | all"),
+    out: Path = typer.Option(Path("reports/phase7")),
+) -> None:
+    """Phase 7 performance report: scorecard, go-live checklist, monitors, learning status."""
+    from goldtrader.db.connect import now_ms
+    from goldtrader.report.scorecard import (
+        go_live_checklist,
+        render_checklist_text,
+        render_scorecard_text,
+        scorecard,
+    )
+
+    cfg = _load(config)
+    conn = connect(db)
+    migrate(conn)
+    now = now_ms()
+    sc = scorecard(conn, period, now)  # type: ignore[arg-type]
+    checks = go_live_checklist(conn, cfg, now)
+    hb = conn.execute("SELECT process, last_ms, status FROM heartbeats ORDER BY process").fetchall()
+    inc = conn.execute(
+        "SELECT kind, severity, opened_ms, acknowledged_ms, closed_ms FROM incidents "
+        "ORDER BY opened_ms DESC LIMIT 20"
+    ).fetchall()
+    mon = conn.execute(
+        "SELECT at_ms, bundle_id, monitor, level, detail FROM monitor_events "
+        "ORDER BY at_ms DESC LIMIT 20"
+    ).fetchall()
+    exps = conn.execute(
+        "SELECT experiment_id, stage, change_type, change_json, stage_entered_ms "
+        "FROM experiments ORDER BY created_ms DESC LIMIT 20"
+    ).fetchall()
+    llm = conn.execute("SELECT COUNT(*), COALESCE(SUM(cost_usd),0) FROM llm_calls").fetchone()
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    lines = [
+        f"# Phase 7 report — {cfg.account.symbol} {cfg.owner.profile}/{cfg.owner.mode} — {stamp}",
+        "",
+        f"Config hash {config_hash(cfg)}; owner hash {owner_hash(cfg)}; period: {period}",
+        "",
+        "## Scorecard (net of spread, slippage, commission and swap)",
+        "",
+        "```",
+        render_scorecard_text(sc),
+        "```",
+        "",
+        "## Go-live checklist (TEST_PLAN §4 Phase 7)",
+        "",
+        "```",
+        render_checklist_text(checks),
+        "```",
+        "",
+        "## Processes",
+        "",
+    ]
+    for r in hb:
+        lines.append(
+            f"- {r['process']}: {r['status']}, last heartbeat {(now - r['last_ms']) / 60000:.0f} min ago"
+        )
+    lines += ["", "## Incidents (latest 20)", ""]
+    lines += [
+        f"- {r['kind']} [{r['severity']}] opened {datetime.fromtimestamp(r['opened_ms'] / 1000, UTC):%Y-%m-%d %H:%M} "
+        f"ack={'yes' if r['acknowledged_ms'] else 'no'} closed={'yes' if r['closed_ms'] else 'no'}"
+        for r in inc
+    ] or ["- none"]
+    lines += ["", "## Monitor events (latest 20)", ""]
+    lines += [
+        f"- {datetime.fromtimestamp(r['at_ms'] / 1000, UTC):%Y-%m-%d} {r['bundle_id'][:8]} {r['monitor']} {r['level']} {r['detail'] or ''}"
+        for r in mon
+    ] or ["- none"]
+    lines += ["", "## Experiments", ""]
+    lines += [
+        f"- {r['experiment_id'][:8]} {r['stage']} {r['change_type']} {r['change_json'][:80]}"
+        for r in exps
+    ] or ["- none"]
+    lines += ["", f"AI calls: {llm[0]}, spend {llm[1]:.2f} USD", ""]
+    out.mkdir(parents=True, exist_ok=True)
+    path = out / f"report_{period}_{stamp}.md"
+    text = "\n".join(lines)
+    path.write_text(text)
+    typer.echo(text)
+    typer.echo(f"written: {path}")
+
+
 @app.command("secret-set")
 def secret_set(name: str) -> None:
     """Store a secret in the OS credential store (prompts; the value is never echoed)."""

@@ -1,0 +1,32 @@
+# Phase 7 rehearsal of the owner exception (D-017, D-052): demo account with its balance set to 50 USD
+# in the Personal Area, micro_live limits, demo environment. Never used for live.
+version: 1
+account:
+  symbol: XAUUSDm
+  environment: demo
+  account_type: standard
+  leverage_hint: 500
+session:
+  dst_mode: auto
+  pre_break_buffer_min: 15
+  trade_only_hours_utc: [12, 17]
+strategies:
+  - id: trend_atr_v1
+    kind: trend_atr
+    enabled: true
+    mode: demo
+    params: {ema_fast: 20, ema_slow: 50, atr_period: 14, stop_atr: 0.5, target_atr: 1.0}
+owner:
+  profile: micro_live
+  mode: demo
+  risk:
+    risk_per_trade_pct: 30.0
+    daily_loss_pct: 40.0
+    weekly_loss_pct: 60.0
+    max_drawdown_pct: 60.0
+    max_positions: 1
+    max_volume_lots: 0.01
+    max_spread_pips: 60
+    min_equity_to_enter_usd: 30.0
+    stop_atr_min: 0.2
+    stop_atr_max: 0.6

@@ -16,6 +16,7 @@ Source of truth for the AI Gold Trader project. Start with `00_PROJECT_BRIEF.md`
 | `RISK_POLICY.md` | Phase 2 draft: normal limits, owner exception profile (D-017), kill switch, safe responses, risk register |
 | `TEST_PLAN.md` | Phase 2 draft: test levels, backtest standard, phase exit gates, CI |
 | `GLOSSARY.md` | Phase 2 draft |
+| `PHASE7_RUNBOOK.md` | Owner's step-by-step guide for demo trading on the PC |
 | `DECISIONS.md` | D-001 to D-026; owner decisions of 2026-11-04 are D-016 to D-023 |
 | `KNOWN_UNKNOWNS.md` | KU-001 to KU-022 with resolution method and deadline |
 
