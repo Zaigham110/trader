@@ -304,7 +304,8 @@ def test_breaker_open_skips_the_call_and_half_open_trial_runs():
     # a fresh process reloads the open breaker from the store
     reloaded = CircuitBreaker("strategy", store)
     assert reloaded.state == "open" and reloaded.next_trial_ms == breaker.next_trial_ms
-    run = run_agent(_spec(), {}, fake, store, now_ms=NOW + 1800 * 1000, breaker=reloaded)
+    # the breaker stamps failures at call completion, so probe a few seconds past the wait
+    run = run_agent(_spec(), {}, fake, store, now_ms=NOW + 1805 * 1000, breaker=reloaded)
     assert run.status == "ok" and reloaded.state == "closed"
 
 
