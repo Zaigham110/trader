@@ -11,7 +11,7 @@ def test_router_stamps_bundle_and_uses_variant():
         enabled=True,
         params={**STRAT.params, "stop_atr": 0.8},
         stop_atr_min=0.3,
-        stop_atr_max=0.9,
+        stop_atr_max=1.2,
         min_reward_risk=1.0,
     )
     routed = []
