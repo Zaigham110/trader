@@ -60,9 +60,21 @@ uv pip install -e ".[dev,windows]"
 
 ## Part C — accounts and keys (20 minutes)
 
-9. **Anthropic API key.** https://console.anthropic.com → *API keys* → create a key. Add a small
-   amount of credit (10 USD is enough for the first weeks at the planned usage). Keep the key in
-   your password manager; you will type it once in step 12.
+9. **Anthropic API key, paid for by your Claude Max plan (D-054).** Max plans include 100 USD of
+   Claude API credit per billing cycle (Verified 2026-11-16: platform.claude.com/docs/en/about-claude/
+   api-credits-for-subscribers). Steps:
+   a. On https://claude.ai go to *Settings → Billing → API credits* and link a Claude Console
+      organization (create one at https://platform.claude.com first if you have none). New
+      subscribers can claim after 7 days on the plan. Each plan links to one organization and the
+      link cannot be changed by you later, so pick the organization you will build in.
+   b. In the Console, create a **workspace** for this project and set a workspace spend limit
+      (for example 80 USD/month) so nothing else in the organization can consume the credit.
+   c. In that workspace create an **API key**. Keep it in your password manager; you type it once in
+      step 12. No payment method is needed; usage draws from the included credit, which expires at
+      the end of each cycle without rollover. When it is exhausted, API requests stop until the
+      next cycle (the bots pause; trading safety does not depend on the model).
+   The credit does not cover Claude Code or Claude.ai usage, and the system must not use your
+   Claude.ai login or a Claude Code token: Anthropic's terms reserve those for its own apps.
 10. **Telegram bot.** In Telegram open **@BotFather** → `/newbot` → choose a name and a username
     ending in `bot`. BotFather replies with the **bot token** (looks like `1234567890:AA...`).
     Then open a chat with your new bot and send it any message, for example `hello`.

@@ -105,6 +105,14 @@ enforcement (llama.cpp, Ollama with raised context, vLLM). Recommended models an
 `research/03_local_llm.md` (Qwen3.5-9B for fast, Qwen3.8-27B for standard; flat schemas; thinking off
 for extraction; Ollama context default must be raised). The same eval sets gate the switch.
 
+## 8a. Funding (D-054, 2026-11-16)
+
+The owner's Claude Max plan includes 100 USD of Claude API credit per billing cycle, claimed by
+linking a Console organization to the plan (Verified). The estimated 20–60 USD/month of the tiered
+design (§2) fits inside it; the config budget caps (3 USD/day, 60 USD/month) keep it there. Credits
+do not roll over; when exhausted the API returns a credit-balance error, which the provider maps to a
+non-retryable error and the runtime to the degraded fallback (bots pause, execution safety continues).
+
 ## 9. Implementation status (2026-11-05)
 
 `goldtrader.llm.anthropic_provider.AnthropicProvider` implements §1 for the Anthropic API per D-037
