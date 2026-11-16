@@ -5,6 +5,21 @@ Windows machine** (from a Mac: Microsoft Remote Desktop → the Windows machine 
 Copy one block at a time. Expected results are given so you can tell when a step worked.
 Never paste secrets into chat, files in the repository, or screenshots.
 
+## Fastest route: one command
+
+Parts A and B below are automated by `scripts/windows/bootstrap.ps1`. In PowerShell on the Windows
+machine run:
+
+```powershell
+Set-ExecutionPolicy -Scope Process Bypass
+irm https://raw.githubusercontent.com/Zaigham110/trader/claude/ecstatic-clarke-8nleqk/scripts/windows/bootstrap.ps1 | iex
+```
+
+It installs Git, Python and uv with winget if missing, clones the repository to `$HOME\trader`,
+creates the environment, installs the package and runs the tests. Then do Part C (keys and
+secrets) by hand and run `.\scripts\windows\preflight.ps1` for Part D. Part A step 1 (power and
+update settings) and step 5 (MT5 install and login) remain manual.
+
 ## Part A — the machine (15 minutes)
 
 1. **Windows settings.** Settings → System → Power: screen off is fine, *sleep never* (on a VPS this
