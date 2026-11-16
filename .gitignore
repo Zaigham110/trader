@@ -10,8 +10,8 @@ __pycache__/
 *.pyc
 .venv/
 # data and reports (large, regenerated)
-data/
-reports/
+/data/
+/reports/
 # os
 .DS_Store
 .venv/
