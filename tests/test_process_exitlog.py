@@ -11,12 +11,13 @@ from pathlib import Path
 
 import pytest
 
+
+from goldtrader.process.exitlog import ExitLog
+
 pytestmark = pytest.mark.skipif(
     sys.platform == "win32",
     reason="POSIX signal semantics; the Windows paths are exercised by the supervisor tests",
 )
-
-from goldtrader.process.exitlog import ExitLog
 
 PY = sys.executable
 
