@@ -92,13 +92,23 @@ def test_status_command_reads_db_without_gateway(tmp_path: Path, monkeypatch):
 
 
 def test_doctor_and_report_run_on_a_fresh_db(tmp_path: Path, monkeypatch):
+    import sys as _sys
+
+    monkeypatch.setitem(
+        _sys.modules, "keyring", None
+    )  # env-only secrets, whatever the machine holds
     monkeypatch.setenv("GOLDTRADER_MT5_LOGIN", "1")
     monkeypatch.setenv("GOLDTRADER_MT5_PASSWORD", "x")
     monkeypatch.setenv("GOLDTRADER_MT5_SERVER", "s")
     r = runner.invoke(app, ["doctor", "--db", str(tmp_path / "d.sqlite")])
     assert r.exit_code == 0, r.output
-    assert "checks passed" in r.output and "x" not in r.output.split("secret MT5_PASSWORD")[1].split("\n")[0]
-    r = runner.invoke(app, ["report", "--db", str(tmp_path / "d.sqlite"), "--out", str(tmp_path / "rep")])
+    assert (
+        "checks passed" in r.output
+        and "x" not in r.output.split("secret MT5_PASSWORD")[1].split("\n")[0]
+    )
+    r = runner.invoke(
+        app, ["report", "--db", str(tmp_path / "d.sqlite"), "--out", str(tmp_path / "rep")]
+    )
     assert r.exit_code == 0, r.output
     assert "Go-live checklist" in r.output and list((tmp_path / "rep").glob("report_all_*.md"))
     monkeypatch.delenv("GOLDTRADER_MT5_PASSWORD")

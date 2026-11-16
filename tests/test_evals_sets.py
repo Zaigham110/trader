@@ -90,7 +90,7 @@ def test_headline_pairs_report_the_same_release_with_opposite_direction():
 
 
 def test_regimes_generator_reproduces_the_committed_file_byte_for_byte():
-    committed = OUT_PATH.read_bytes()
+    committed = OUT_PATH.read_bytes().replace(b"\r\n", b"\n")  # tolerate CRLF checkouts
     assert committed == render().encode("utf-8")
     assert OUT_PATH == SETS_DIR / "regimes_v1.jsonl"
 

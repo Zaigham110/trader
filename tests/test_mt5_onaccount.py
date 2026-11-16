@@ -38,6 +38,14 @@ def by_id(results: list[TestResult]) -> dict[str, TestResult]:
     return {r.id: r for r in results}
 
 
+def _mt5_importable() -> bool:
+    try:
+        import MetaTrader5  # type: ignore[import-not-found]  # noqa: F401
+    except Exception:  # noqa: BLE001
+        return False
+    return True
+
+
 def test_suite_runs_fully_against_fake_and_all_trading_tests_pass():
     fake = make_fake()
     now = datetime.fromtimestamp(fake.tick.time_msc / 1000, UTC)
@@ -58,7 +66,9 @@ def test_suite_runs_fully_against_fake_and_all_trading_tests_pass():
         assert r[f"MT5-{tid}"].status == "pass", r[f"MT5-{tid}"]
     for tid in ("T11", "T13"):
         assert r[f"MT5-{tid}"].status == "info"
-    assert r["MT5-T00"].status == "skip"  # MetaTrader5 not importable on Linux
+    # T00 compares our constants with the real package: skip where it is not importable (Linux),
+    # pass on Windows where it is.
+    assert r["MT5-T00"].status == ("pass" if _mt5_importable() else "skip")
     assert set(READ_ONLY_TESTS) | set(TRADING_TESTS) == {f"T{i:02d}" for i in range(17)}
     # everything the suite opened is closed again; the ledger shows only 0.01/0.02-lot deals
     assert fake.positions_get() == [] and fake.orders_get() == []
@@ -91,7 +101,8 @@ def test_render_markdown_produces_the_table():
     rows = [ln for ln in lines if ln.startswith("| MT5-T")]
     assert len(rows) == 17 and all(row.count("|") == 6 for row in rows)
     assert "| MT5-T08 | hedge + close-by | PASS |" in md
-    assert "Summary: pass" in lines[-1] and "skip 1" in lines[-1]
+    assert "Summary: pass" in lines[-1]
+    assert ("skip 0" if _mt5_importable() else "skip 1") in lines[-1]
     row = render_markdown([TestResult("X", "a|b", "info", {"k": "v|w"}, "n|m")]).splitlines()[4]
     assert row.count("\\|") == 3 and row.replace("\\|", "").count("|") == 6
 
