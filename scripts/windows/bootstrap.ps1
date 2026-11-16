@@ -51,11 +51,13 @@ uv pip install -e ".[dev,windows]"
 Step "MetaTrader5 package import"
 & .venv\Scripts\python -c "import MetaTrader5 as m; print('MetaTrader5', getattr(m, '__version__', 'ok'))"
 
-Step "Tests (about 2 minutes)"
-& .venv\Scripts\python -m pytest -q
-if ($LASTEXITCODE -ne 0) { throw "tests failed; send the output to the developer" }
-
 New-Item -ItemType Directory -Force -Path state, reports\mt5, reports\phase7, data\bars | Out-Null
+
+Step "Tests (about 2 minutes; output saved to reports\pytest-windows.txt)"
+& .venv\Scripts\python -m pytest -q -rf --tb=short 2>&1 | Tee-Object -FilePath reports\pytest-windows.txt | Select-Object -Last 25
+if ($LASTEXITCODE -ne 0) {
+  Write-Host "Some tests failed on this machine. The install is complete; send reports\pytest-windows.txt to the developer before starting the system." -ForegroundColor Yellow
+}
 
 Write-Host "`nInstall complete. Next (docs/WINDOWS_SETUP.md Part C):" -ForegroundColor Green
 Write-Host "  1. Install MetaTrader 5 from Exness, log into the DEMO account, enable 'Allow algorithmic trading'."
