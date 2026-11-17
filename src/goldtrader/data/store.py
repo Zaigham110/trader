@@ -15,6 +15,7 @@ bytes of one or more files (in the given order), or the values, column names and
 Every trial-ledger row records it so a backtest can be tied to the exact data it saw (R-031,
 LEARNING_SYSTEM §1). Two frames with identical content have the same id whatever their file name.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -86,8 +87,14 @@ def _ext() -> str:
     return ".parquet" if PARQUET_AVAILABLE else ".csv.gz"
 
 
-def bars_path(cfg: DataConfig, symbol: str, seconds: int, start: datetime, end: datetime,
-              root: str | Path | None = None) -> Path:
+def bars_path(
+    cfg: DataConfig,
+    symbol: str,
+    seconds: int,
+    start: datetime,
+    end: datetime,
+    root: str | Path | None = None,
+) -> Path:
     """Canonical bars file path for ``symbol`` / ``seconds`` / date range under ``cfg.bars_dir``."""
     base = Path(root) / cfg.bars_dir if root is not None else Path(cfg.bars_dir)
     name = f"{_date(start)}_{_date(end)}{_ext()}"
@@ -167,7 +174,9 @@ def load_bars(path: str | Path) -> pd.DataFrame:
     df = df.drop(columns=["bar_seconds"], errors="ignore")
     df["time"] = df["time"].astype("int64")
     df["ticks"] = df["ticks"].astype("int64")
-    df.index = pd.DatetimeIndex(pd.to_datetime(df["time"].to_numpy(), unit="s", utc=True), name="dt")
+    df.index = pd.DatetimeIndex(
+        pd.to_datetime(df["time"].to_numpy(), unit="s", utc=True), name="dt"
+    )
     if seconds is not None:
         df.attrs["bar_seconds"] = seconds
     return df

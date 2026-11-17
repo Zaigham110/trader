@@ -9,6 +9,7 @@ different runs and sources line up exactly.
 All functions are pure and vectorised with numpy; input ticks need not be sorted (a stable sort is
 applied so that same-millisecond ticks keep file order and "last" means the last one seen).
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -19,8 +20,18 @@ import pandas as pd
 from goldtrader.types import Bar, Tick
 
 BAR_COLUMNS: tuple[str, ...] = (
-    "time", "bid_open", "bid_high", "bid_low", "bid_close",
-    "ask_open", "ask_high", "ask_low", "ask_close", "ticks", "mid_close", "spread_close",
+    "time",
+    "bid_open",
+    "bid_high",
+    "bid_low",
+    "bid_close",
+    "ask_open",
+    "ask_high",
+    "ask_low",
+    "ask_close",
+    "ticks",
+    "mid_close",
+    "spread_close",
 )
 
 
@@ -28,9 +39,9 @@ BAR_COLUMNS: tuple[str, ...] = (
 class TickArrays:
     """Column view of a tick list (sorted stably by time)."""
 
-    time_msc: np.ndarray   # int64
-    bid: np.ndarray        # float64
-    ask: np.ndarray        # float64
+    time_msc: np.ndarray  # int64
+    bid: np.ndarray  # float64
+    ask: np.ndarray  # float64
 
     @classmethod
     def from_ticks(cls, ticks: list[Tick]) -> TickArrays:
@@ -123,8 +134,12 @@ def build_bars(ticks: list[Tick], seconds: int) -> list[Bar]:
 
 
 def _empty_frame(seconds: int) -> pd.DataFrame:
-    df = pd.DataFrame({c: pd.Series([], dtype="int64" if c in ("time", "ticks") else "float64")
-                       for c in BAR_COLUMNS})
+    df = pd.DataFrame(
+        {
+            c: pd.Series([], dtype="int64" if c in ("time", "ticks") else "float64")
+            for c in BAR_COLUMNS
+        }
+    )
     return _finish_frame(df, seconds)
 
 
@@ -156,8 +171,16 @@ def bars_to_frame(bars: list[Bar], seconds: int | None = None) -> pd.DataFrame:
         "time": np.fromiter((b.time for b in bars), dtype="int64", count=n),
         "ticks": np.fromiter((b.ticks for b in bars), dtype="int64", count=n),
     }
-    for name in ("bid_open", "bid_high", "bid_low", "bid_close",
-                 "ask_open", "ask_high", "ask_low", "ask_close"):
+    for name in (
+        "bid_open",
+        "bid_high",
+        "bid_low",
+        "bid_close",
+        "ask_open",
+        "ask_high",
+        "ask_low",
+        "ask_close",
+    ):
         cols[name] = np.fromiter((getattr(b, name) for b in bars), dtype="float64", count=n)
     df = pd.DataFrame(cols)
     df["mid_close"] = (df["ask_close"] + df["bid_close"]) / 2.0
@@ -195,16 +218,33 @@ def frame_to_bars(df: pd.DataFrame, seconds: int | None = None) -> list[Bar]:
         return []
     bar_seconds = int(seconds) if seconds is not None else infer_bar_seconds(df)
     times = _times_array(df).tolist()
-    cols = {name: df[name].to_numpy(dtype="float64").tolist()
-            for name in ("bid_open", "bid_high", "bid_low", "bid_close",
-                         "ask_open", "ask_high", "ask_low", "ask_close")}
+    cols = {
+        name: df[name].to_numpy(dtype="float64").tolist()
+        for name in (
+            "bid_open",
+            "bid_high",
+            "bid_low",
+            "bid_close",
+            "ask_open",
+            "ask_high",
+            "ask_low",
+            "ask_close",
+        )
+    }
     ticks = df["ticks"].to_numpy(dtype="int64").tolist()
     return [
-        Bar(time=times[i], seconds=bar_seconds,
-            bid_open=cols["bid_open"][i], bid_high=cols["bid_high"][i],
-            bid_low=cols["bid_low"][i], bid_close=cols["bid_close"][i],
-            ask_open=cols["ask_open"][i], ask_high=cols["ask_high"][i],
-            ask_low=cols["ask_low"][i], ask_close=cols["ask_close"][i],
-            ticks=ticks[i])
+        Bar(
+            time=times[i],
+            seconds=bar_seconds,
+            bid_open=cols["bid_open"][i],
+            bid_high=cols["bid_high"][i],
+            bid_low=cols["bid_low"][i],
+            bid_close=cols["bid_close"][i],
+            ask_open=cols["ask_open"][i],
+            ask_high=cols["ask_high"][i],
+            ask_low=cols["ask_low"][i],
+            ask_close=cols["ask_close"][i],
+            ticks=ticks[i],
+        )
         for i in range(len(times))
     ]

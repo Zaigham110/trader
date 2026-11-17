@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -33,6 +34,13 @@ from goldtrader.mt5.spec import find_gold_symbol, read_spec
 from goldtrader.types import SymbolSpec
 
 app = typer.Typer(no_args_is_help=True, add_completion=False, help=__doc__)
+
+# Windows consoles default to a legacy code page; our reports use arrows and dashes.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8")  # type: ignore[union-attr]
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _client(fake: bool):
@@ -226,7 +234,8 @@ def backtest(
     base = out / f"{s.id}_{stamp}"
     res.trades.to_csv(base.with_suffix(".trades.csv"), index=False)
     (base.with_suffix(".json")).write_text(
-        json.dumps(
+        encoding="utf-8",
+        data=json.dumps(
             {
                 "metrics": m,
                 "gate": rep.as_dict(),
@@ -235,9 +244,9 @@ def backtest(
             },
             indent=2,
             default=str,
-        )
+        ),
     )
-    (base.with_suffix(".md")).write_text(render_report(rep, s.id))
+    (base.with_suffix(".md")).write_text(render_report(rep, s.id), encoding="utf-8")
     typer.echo(render_report(rep, s.id))
     typer.echo(f"reports: {base}.json / .md / .trades.csv")
 
@@ -308,8 +317,12 @@ def sweep_cmd(
         {"params": p, **{k: v for k, v in mm.items() if not isinstance(v, dict)}}
         for p, _, mm in sw.runs
     ]
-    base.with_suffix(".runs.json").write_text(json.dumps(rows, indent=2, default=str))
-    base.with_suffix(".md").write_text(render_report(rep, f"{kind} best {params}"))
+    base.with_suffix(".runs.json").write_text(
+        encoding="utf-8", data=json.dumps(rows, indent=2, default=str)
+    )
+    base.with_suffix(".md").write_text(
+        render_report(rep, f"{kind} best {params}"), encoding="utf-8"
+    )
     typer.echo(render_report(rep, f"{kind} best {params}"))
     typer.echo(f"{len(sw.runs)} runs recorded in {db}; ledger size {repo.trial_count()}")
 
@@ -359,7 +372,7 @@ def gateway(
                 "from state/gateway.token",
                 err=True,
             )
-            (state_dir / "gateway.token").write_text(svc.token)
+            (state_dir / "gateway.token").write_text(svc.token, encoding="utf-8")
         stop = threading.Event()
         if minutes:
             threading.Timer(minutes * 60, stop.set).start()
@@ -517,6 +530,23 @@ def llm_check(config: Path = typer.Option(Path("config/demo.yaml"))) -> None:
             typer.echo(f"{tier:<9} {p.ping(tier)} ok")
         except Exception as e:  # noqa: BLE001
             typer.echo(f"{tier:<9} {cfg.llm.tiers[tier].model} FAILED: {e}", err=True)
+            cause = e.__cause__ or e
+            from goldtrader.llm.anthropic_provider import redact
+
+            for attr in ("status_code", "body"):
+                v = getattr(cause, attr, None)
+                if v is not None:
+                    typer.echo(f"  {attr}: {redact(str(v))[:600]}", err=True)
+            resp = getattr(cause, "response", None)
+            text = getattr(resp, "text", None)
+            if text:
+                typer.echo(f"  response: {redact(str(text))[:600]}", err=True)
+            typer.echo(
+                "  if the message says the credit balance is too low: link the Max plan's API "
+                "credit to this Console organization (docs/WINDOWS_SETUP.md step 9) or check "
+                "platform.claude.com/settings/billing",
+                err=True,
+            )
             raise typer.Exit(code=1) from e
 
 
@@ -774,7 +804,7 @@ def report(
     out.mkdir(parents=True, exist_ok=True)
     path = out / f"report_{period}_{stamp}.md"
     text = "\n".join(lines)
-    path.write_text(text)
+    path.write_text(text, encoding="utf-8")
     typer.echo(text)
     typer.echo(f"written: {path}")
 
@@ -798,6 +828,51 @@ def secret_set(name: str) -> None:
     typer.echo(f"{cleaned} stored in {where}")
 
 
+@app.command("backfill")
+def backfill(
+    fake: bool = typer.Option(False, "--fake/--real"),
+    symbol: str | None = None,
+    days: int = 60,
+    db: Path = typer.Option(Path("state/demo.sqlite")),
+) -> None:
+    """Pull M1 bars from the terminal's history into the database (features need ~20 days)."""
+    from datetime import timedelta
+
+    from goldtrader.mt5 import constants as K
+
+    conn = connect(db)
+    migrate(conn)
+    repo = Repo(conn)
+    client = _client(fake)
+    total = 0
+    try:
+        sym = symbol or find_gold_symbol(client, preferred="XAUUSDm")
+        client.symbol_select(sym, True)
+        end = datetime.now(UTC)
+        start = end - timedelta(days=days)
+        cursor = start
+        earliest = None
+        while cursor < end:
+            chunk_end = min(cursor + timedelta(days=7), end)
+            bars = client.copy_rates_range(sym, K.TIMEFRAME_M1, cursor, chunk_end) or []
+            if bars:
+                total += repo.upsert_bars(sym, bars, "mt5_rates")
+                earliest = earliest or datetime.fromtimestamp(bars[0].time, UTC)
+            cursor = chunk_end
+        typer.echo(
+            f"{sym}: {total} M1 bars stored in {db}"
+            + (
+                f" (earliest {earliest:%Y-%m-%d %H:%M} UTC)"
+                if earliest
+                else "; the terminal returned no bars for that range"
+            )
+        )
+    finally:
+        client.shutdown()
+    if total == 0:
+        raise typer.Exit(code=1)
+
+
 @app.command("mt5-tests")
 def mt5_tests(
     fake: bool = typer.Option(True, "--fake/--real"),
@@ -817,7 +892,7 @@ def mt5_tests(
     typer.echo(md)
     if out is not None:
         out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(md)
+        out.write_text(md, encoding="utf-8")
     if any(r.status == "fail" for r in results):
         raise typer.Exit(code=1)
 

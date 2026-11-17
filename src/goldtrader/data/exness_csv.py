@@ -17,6 +17,7 @@ Robustness rules (TEST_PLAN §2 "first available timestamp recorded", data quali
 Accepted containers: plain ``.csv``, ``.csv.gz`` and ``.zip`` holding one or more CSV members (members
 are concatenated). No network access; everything is read from the local file.
 """
+
 from __future__ import annotations
 
 import gzip
@@ -43,10 +44,10 @@ class ReadReport:
     """Result of :func:`load_exness_ticks`: clean ticks plus data-quality counters."""
 
     ticks: list[Tick] = field(default_factory=list)
-    rows_total: int = 0        # data lines seen (header excluded)
-    malformed: int = 0         # unparseable timestamp / price, bad field count
-    crossed: int = 0           # bid > ask
-    duplicates: int = 0        # exact duplicate rows removed
+    rows_total: int = 0  # data lines seen (header excluded)
+    malformed: int = 0  # unparseable timestamp / price, bad field count
+    crossed: int = 0  # bid > ask
+    duplicates: int = 0  # exact duplicate rows removed
     first_time_msc: int | None = None
     last_time_msc: int | None = None
     symbols: tuple[str, ...] = ()
@@ -65,9 +66,13 @@ def _read_csv_members(path: Path) -> list[bytes]:
     suffixes = [s.lower() for s in path.suffixes]
     if suffixes and suffixes[-1] == ".zip":
         with zipfile.ZipFile(path) as zf:
-            names = [n for n in zf.namelist()
-                     if not n.endswith("/") and not Path(n).name.startswith(".")
-                     and Path(n).suffix.lower() in (".csv", ".txt", ".gz")]
+            names = [
+                n
+                for n in zf.namelist()
+                if not n.endswith("/")
+                and not Path(n).name.startswith(".")
+                and Path(n).suffix.lower() in (".csv", ".txt", ".gz")
+            ]
             if not names:
                 raise ValueError(f"{path}: zip archive contains no CSV member")
             out: list[bytes] = []
@@ -108,9 +113,9 @@ def _epoch_to_ms(values: pd.Series) -> np.ndarray:
     """
     nums = pd.to_numeric(values.str.strip(), errors="coerce").to_numpy(dtype="float64")
     digits = np.floor(np.log10(np.maximum(np.abs(nums), 1.0))).astype("int64") + 1
-    scale = np.where(digits <= 10, 1_000.0,
-                     np.where(digits <= 13, 1.0,
-                              np.where(digits <= 16, 1e-3, 1e-6)))
+    scale = np.where(
+        digits <= 10, 1_000.0, np.where(digits <= 13, 1.0, np.where(digits <= 16, 1e-3, 1e-6))
+    )
     out = np.rint(nums * scale)
     return out
 
@@ -181,28 +186,54 @@ def parse_exness_csv_bytes(raw: bytes) -> tuple[pd.DataFrame, int, int]:
     The frame still contains crossed quotes and duplicates; :func:`load_exness_ticks` removes them.
     """
     if not raw.strip():
-        return pd.DataFrame({"time_msc": pd.Series([], dtype="int64"), "bid": [], "ask": [],
-                             "symbol": pd.Series([], dtype="string")}), 0, 0
+        return (
+            pd.DataFrame(
+                {
+                    "time_msc": pd.Series([], dtype="int64"),
+                    "bid": [],
+                    "ask": [],
+                    "symbol": pd.Series([], dtype="string"),
+                }
+            ),
+            0,
+            0,
+        )
     header = _has_header(raw)
     rows_total = _count_data_lines(raw) - (1 if header else 0)
     df = pd.read_csv(
-        io.BytesIO(raw), header=0 if header else None, dtype="string", skip_blank_lines=True,
-        on_bad_lines="skip", skipinitialspace=True, keep_default_na=False, na_values=[""],
-        encoding="utf-8", encoding_errors="replace",
+        io.BytesIO(raw),
+        header=0 if header else None,
+        dtype="string",
+        skip_blank_lines=True,
+        on_bad_lines="skip",
+        skipinitialspace=True,
+        keep_default_na=False,
+        na_values=[""],
+        encoding="utf-8",
+        encoding_errors="replace",
     )
     time_col, bid_col, ask_col, sym_col = _pick_columns(df)
     time_ms = parse_timestamps(df[time_col])
-    bid = pd.to_numeric(df[bid_col].astype("string").str.strip(), errors="coerce").to_numpy("float64")
-    ask = pd.to_numeric(df[ask_col].astype("string").str.strip(), errors="coerce").to_numpy("float64")
+    bid = pd.to_numeric(df[bid_col].astype("string").str.strip(), errors="coerce").to_numpy(
+        "float64"
+    )
+    ask = pd.to_numeric(df[ask_col].astype("string").str.strip(), errors="coerce").to_numpy(
+        "float64"
+    )
     ok = (~np.isnan(time_ms)) & np.isfinite(bid) & np.isfinite(ask) & (bid > 0) & (ask > 0)
-    symbol = (df[sym_col].astype("string").str.strip() if sym_col is not None
-              else pd.Series(pd.NA, index=df.index, dtype="string"))
-    out = pd.DataFrame({
-        "time_msc": time_ms[ok].astype("int64"),
-        "bid": bid[ok],
-        "ask": ask[ok],
-        "symbol": symbol[ok].reset_index(drop=True),
-    })
+    symbol = (
+        df[sym_col].astype("string").str.strip()
+        if sym_col is not None
+        else pd.Series(pd.NA, index=df.index, dtype="string")
+    )
+    out = pd.DataFrame(
+        {
+            "time_msc": time_ms[ok].astype("int64"),
+            "bid": bid[ok],
+            "ask": ask[ok],
+            "symbol": symbol[ok].reset_index(drop=True),
+        }
+    )
     malformed = rows_total - int(ok.sum())
     return out, rows_total, max(malformed, 0)
 
@@ -245,9 +276,15 @@ def load_exness_ticks(path: str | Path) -> ReadReport:
         report.first_time_msc = report.ticks[0].time_msc
         report.last_time_msc = report.ticks[-1].time_msc
     if report.malformed or report.crossed or report.duplicates:
-        log.info("%s: kept %d of %d rows (malformed %d, crossed %d, duplicates %d)", p,
-                 report.kept, report.rows_total, report.malformed, report.crossed,
-                 report.duplicates)
+        log.info(
+            "%s: kept %d of %d rows (malformed %d, crossed %d, duplicates %d)",
+            p,
+            report.kept,
+            report.rows_total,
+            report.malformed,
+            report.crossed,
+            report.duplicates,
+        )
     return report
 
 

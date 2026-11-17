@@ -494,6 +494,9 @@ class ExecutionEngine:
             if result is None:
                 return None, "order_send returned None"
             cls = classify_retcode(result.retcode)
+            comment_l = (result.comment or "").lower()
+            if cls == "transient" and ("stop" in comment_l or "volume" in comment_l):
+                cls = "fatal"  # Exness reports bad stops/volume under 10011/10006: never retry
             if cls == "ok":
                 self.throttle.reset_backoff()
                 return result, "ok"

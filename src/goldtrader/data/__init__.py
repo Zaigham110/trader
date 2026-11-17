@@ -2,6 +2,7 @@
 
 See ``docs/ARCHITECTURE.md`` §2.1 (``market``) and ``docs/TEST_PLAN.md`` §2. Pure, offline code.
 """
+
 from goldtrader.data.exness_csv import (  # noqa: F401
     ReadReport,
     frame_to_ticks,

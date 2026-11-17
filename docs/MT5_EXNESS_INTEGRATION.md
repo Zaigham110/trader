@@ -10,11 +10,11 @@ Last updated: 2026-11-04. Labels: **Verified** (source and access date in `resea
 | --- | --- | --- |
 | Account type | Standard | Owner |
 | Platform | MT5 | Owner |
-| Expected gold symbol | `XAUUSDm` (Standard suffix `-m`) | Verified suffix table; exact name KU-019 |
+| Gold symbol | `XAUUSDm` | Verified on the owner's demo (Exness-MT5Trial15, 2026-11-17) |
 | Execution | Market execution, no requotes, slippage possible | Verified |
 | Commission | None | Verified |
 | Margin call / stop out | 60% / 0% (20% if the entity is Kenya or Jordan) | Verified |
-| Entity | Unknown; read `account_info().company` and PA footer | KU-002 |
+| Entity | `account_info().company` = "Exness Technologies Ltd" on the demo server; the live entity is read the same way at go-live | Verified (demo) 2026-11-17 |
 | Capital | Under 50 USD | Owner |
 | Leverage setting | Recommend 1:500 in the Personal Area (margin ≈ 8 USD per 0.01 lot at 4,000 USD); default is 1:2000 below 5,000 USD equity | Verified tiers; recommendation Assumption |
 | Swap-free | Likely by default ("By default, all accounts are swap-free"); irrelevant for intraday | Verified statement |
@@ -33,14 +33,31 @@ Published by Exness (Verified, Commodities article updated 2026-11-03):
 | Max leverage | 1:Unlimited if eligible; HMR 1:200–1:1000 (one page says 1:100) |
 | Stop level | "Refer to trading platform" |
 
-To be read from `symbol_info("XAUUSDm")` at startup and stored in `symbol_specs` (KU-001):
+Read from `symbol_info("XAUUSDm")` on the owner's demo account (Exness-MT5Trial15, login 474942817,
+`goldctl spec-dump --real`, 2026-11-17 ~00:25 UTC; **Verified**, stored in `symbol_specs`; KU-001 closed):
 
-`digits, point, trade_tick_size, trade_tick_value, trade_contract_size, volume_min, volume_max,
-volume_step, volume_limit, trade_stops_level, trade_freeze_level, trade_mode, trade_exemode,
-filling_mode, swap_mode, swap_long, swap_short, swap_rollover3days, margin_initial, margin_hedged,
-currency_base, currency_profit, currency_margin, session_deals, spread, spread_float`.
+| Field | Value | Field | Value |
+| --- | --- | --- | --- |
+| digits | 3 | point | 0.001 |
+| trade_tick_size | 0.001 | trade_tick_value | 0.1 USD |
+| trade_contract_size | 100 | volume_min / max / step | 0.01 / 200 / 0.01 |
+| volume_limit | 0 (none) | trade_stops_level / freeze_level | 0 / 0 |
+| trade_mode | 4 FULL | trade_exemode | 2 MARKET |
+| filling_mode | 3 (FOK and IOC; RETURN → 10030) | swap_mode | 1 (points) |
+| swap_long / swap_short | −474.3 / 0 points per day | swap_rollover3days | 3 (Wednesday) |
+| margin_initial / margin_hedged | 0 / 0 (contract size used) | currency_base / profit / margin | XAU / USD / XAU |
+| spread at sample | 240 points = 0.24 USD | spread_float | true |
 
-Derived money math (Verified formulas):
+Account at the same time: trade_mode 0 (demo), leverage 1:2000, limit_orders 1024, margin_mode 2
+(hedging), margin_so_call 60, margin_so_so 0, balance 4,977 USD. Margin for 0.10 lot at ask 3,855 was
+19.28 USD (= 0.1 × 100 × 3855 / 2000). Terminal ping 25.9 ms; order round trip p50 34 ms, p95 43 ms.
+Demo slippage on 20 market orders: entry mean −26.6 points, exit mean +5.5 points, worst 110 points
+(0.11 USD); commission 0 on every deal.
+
+**Note on units.** Exness quotes gold to 3 decimals (point = 0.001), while its published "pip" is
+0.01. The code works in points from the spec; the docs keep "pip = 0.01 USD" for money math (D-055).
+
+Derived money math (Verified formulas, re-checked against the spec above):
 
 - Pip value per 1.00 lot = 1 × 100 × 0.01 = 1.00 USD per pip; per 0.01 lot = 0.01 USD per pip.
 - 1 USD move in gold on 0.01 lot = 1.00 USD P&L.
@@ -107,6 +124,21 @@ Ping to the assigned server from `terminal_info().ping_last`. A paid Windows VPS
 the documented upgrade path if uptime is a problem.
 
 ## 8. Phase 3 acceptance checklist (the 16 on-account tests)
+
+**Demo run 2026-11-17 (Exness-MT5Trial15).** Read-only suite: all pass except T14 (history probe asked
+for 5,000,000 bars at once, which the server answers with nothing; fixed to a bounded range). Trade
+suite: T00–T05, T08, T10–T13, T15, T16 pass. Exness differs from the generic MQL5 expectations in three
+places, now accepted by the probes and by the execution engine (a comment containing "stop" or
+"volume" is never retried):
+
+| Test | Expected (MQL5 docs) | Exness demo answer |
+| --- | --- | --- |
+| T06 SL inside the spread | 10016 INVALID_STOPS | 10011 / 10006 with comment "bad stops" |
+| T07 close more than the position | 10038 INVALID_CLOSE_VOLUME | 10014 INVALID_VOLUME |
+| T09 buy-stop at the ask with TP one point away | 10008 PLACED, then `[SL violated]` | 10006 REJECT "bad stops", no pending order |
+
+Tick history on the demo server starts 2026-11-06 (demo servers keep days, not years); M1 bar
+history is deeper and is pulled with `goldctl backfill --real --days 60` into `bars`.
 
 Implemented in `src/goldtrader/mt5/onaccount.py` and run with `goldctl mt5-tests` (D-028). On Linux the
 suite runs against `FakeMT5` in CI; on the owner's Windows PC it runs against the real terminal and

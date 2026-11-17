@@ -6,6 +6,7 @@
 # It installs Git, Python 3.12 and uv with winget if missing, clones the repository to $HOME\trader
 # on the development branch, creates the virtual environment, installs the package with the
 # Windows extras (MetaTrader5, keyring) and runs the test suite. It never asks for or stores secrets.
+$env:PYTHONUTF8 = "1"
 $ErrorActionPreference = "Stop"
 $Branch = "claude/ecstatic-clarke-8nleqk"
 $Repo = "https://github.com/Zaigham110/trader.git"

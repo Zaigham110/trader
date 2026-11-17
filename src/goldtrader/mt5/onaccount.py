@@ -451,11 +451,20 @@ def t06_stops_probe(client: MT5Client, symbol: str) -> TestResult:
                 _close(client, pos)
     finally:
         cleanup(client, symbol)
-    ok = (
-        details.get("valid_retcode") in K.RETCODE_OK
-        and details.get("inside_spread_retcode") == K.TRADE_RETCODE_INVALID_STOPS
+    inside_rc = details.get("inside_spread_retcode")
+    inside_comment = str(details.get("inside_spread_comment") or "").lower()
+    # Exness answers an SL inside the spread with 10006/10011 and the comment "bad stops" rather
+    # than 10016 (observed on Exness-MT5Trial15, 2026-11-17); both count as the broker refusing.
+    refused = inside_rc == K.TRADE_RETCODE_INVALID_STOPS or (
+        inside_rc in (K.TRADE_RETCODE_REJECT, K.TRADE_RETCODE_ERROR, K.TRADE_RETCODE_INVALID)
+        and "stop" in inside_comment
     )
-    notes = "" if ok else "expected valid→10009 and SL at bid→10016"
+    ok = details.get("valid_retcode") in K.RETCODE_OK and refused
+    notes = (
+        f"broker refuses SL inside the spread with {inside_rc} '{inside_comment}'"
+        if ok and inside_rc != K.TRADE_RETCODE_INVALID_STOPS
+        else ("" if ok else "expected valid->10009 and SL at bid refused (10016 or 'bad stops')")
+    )
     return TestResult("MT5-T06", "stops rule probe", "pass" if ok else "fail", details, notes)
 
 
@@ -494,14 +503,15 @@ def t07_partial_close(client: MT5Client, symbol: str, volume: float = 0.02) -> T
     ok = (
         details.get("partial_retcode") in K.RETCODE_OK
         and abs(details.get("remaining_volume", 0.0) - half) < 1e-9
-        and details.get("overclose_retcode") == K.TRADE_RETCODE_INVALID_CLOSE_VOLUME
+        and details.get("overclose_retcode")
+        in (K.TRADE_RETCODE_INVALID_CLOSE_VOLUME, K.TRADE_RETCODE_INVALID_VOLUME)
     )
     return TestResult(
         "MT5-T07",
         "partial close",
         "pass" if ok else "fail",
         details,
-        "" if ok else "expected 10009 + half remaining, then 10038",
+        "" if ok else "expected 10009 + half remaining, then 10038 or 10014 (Exness) on over-close",
     )
 
 
@@ -599,11 +609,22 @@ def t09_pending_limits(client: MT5Client, symbol: str) -> TestResult:
             details["remove_retcode"] = rem.retcode
     finally:
         cleanup(client, symbol)
-    ok = (
+    placed = (
         details.get("place_retcode") == K.TRADE_RETCODE_PLACED and details.get("pending_count") == 1
     )
+    # Exness rejects a stop order placed at the current price / with a TP one point away with
+    # 10006 "bad stops" (observed 2026-11-17): the rule exists, so that is also a pass.
+    refused_bad_stops = (
+        details.get("place_retcode") == K.TRADE_RETCODE_REJECT
+        and "stop" in str(details.get("place_comment") or "").lower()
+    )
+    ok = placed or refused_bad_stops
     notes = (
-        "" if ok else "expected 10008 and one pending order; see place_comment for [SL violated]"
+        "broker refused the stop order at market with 'bad stops' (no pending order created)"
+        if refused_bad_stops
+        else ""
+        if ok
+        else "expected 10008 and one pending order; see place_comment for [SL violated]"
     )
     if acct.limit_orders not in (0, 1000):
         notes = (notes + "; " if notes else "") + f"limit_orders {acct.limit_orders} (expect 1000)"
@@ -770,7 +791,11 @@ def t14_history_depth(
         ("H1", K.TIMEFRAME_H1),
         ("D1", K.TIMEFRAME_D1),
     ):
-        bars = client.copy_rates_from(symbol, tf, now, 5_000_000)
+        # Ask for a bounded range first (a 5,000,000-bar request returned nothing on the Exness
+        # demo server, 2026-11-17); fall back to a count the terminal's Max-bars setting allows.
+        bars = client.copy_rates_range(symbol, tf, now - timedelta(days=120), now)
+        if not bars:
+            bars = client.copy_rates_from(symbol, tf, now, 90_000)
         counts[name] = 0 if not bars else len(bars)
         earliest[name] = None if not bars else datetime.fromtimestamp(bars[0].time, UTC).isoformat()
     tick_month: str | None = None

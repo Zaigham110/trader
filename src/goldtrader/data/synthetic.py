@@ -20,6 +20,7 @@ Everything is vectorised with numpy; 30 days at one tick per second (≈ 1.8 M o
 takes a few seconds, most of it building the ``Tick`` objects. ``generate_gold_tick_arrays`` returns
 the raw arrays when objects are not needed. The same ``seed`` always yields the same data.
 """
+
 from __future__ import annotations
 
 import math
@@ -36,19 +37,21 @@ PIP = 0.01
 PRICE_DECIMALS = 2
 
 # winter Exness gold schedule in seconds of the UTC day (HoursConfig defaults)
-BREAK_START_S = 21 * 3600 + 58 * 60      # 21:58:00
-REOPEN_S = 23 * 3600 + 2 * 60            # 23:02:00
-SUNDAY_OPEN_S = 23 * 3600 + 5 * 60       # 23:05:00
-WIDE_AFTER_REOPEN_S = 5 * 60             # 60+ pip spread for 5 minutes after a reopen
+BREAK_START_S = 21 * 3600 + 58 * 60  # 21:58:00
+REOPEN_S = 23 * 3600 + 2 * 60  # 23:02:00
+SUNDAY_OPEN_S = 23 * 3600 + 5 * 60  # 23:05:00
+WIDE_AFTER_REOPEN_S = 5 * 60  # 60+ pip spread for 5 minutes after a reopen
 
 REGIME_NAMES = ("calm", "normal", "stress")
 REGIME_VOL_MULT = np.array([0.55, 1.0, 1.9])
 # hourly transition matrix: sticky regimes, a stress period lasts a few hours to a day
-REGIME_TRANSITION = np.array([
-    [0.985, 0.015, 0.000],
-    [0.010, 0.980, 0.010],
-    [0.000, 0.030, 0.970],
-])
+REGIME_TRANSITION = np.array(
+    [
+        [0.985, 0.015, 0.000],
+        [0.010, 0.980, 0.010],
+        [0.000, 0.030, 0.970],
+    ]
+)
 
 Schedule = Callable[[datetime], bool]
 
@@ -61,14 +64,14 @@ def open_mask_winter(t_sec: np.ndarray) -> np.ndarray:
     """Vectorised built-in winter schedule: True where the market quotes at epoch second ``t_sec``."""
     t_sec = np.asarray(t_sec, dtype="int64")
     day = t_sec // 86400
-    weekday = (day + 3) % 7            # 1970-01-01 was a Thursday; Monday = 0
+    weekday = (day + 3) % 7  # 1970-01-01 was a Thursday; Monday = 0
     sod = t_sec % 86400
     in_break = (sod >= BREAK_START_S) & (sod < REOPEN_S)
     is_open = np.ones(len(t_sec), dtype=bool)
-    is_open &= ~((weekday <= 3) & in_break)                 # Mon–Thu daily break
-    is_open &= ~((weekday == 4) & (sod >= BREAK_START_S))   # Friday close
-    is_open &= weekday != 5                                 # Saturday
-    is_open &= ~((weekday == 6) & (sod < SUNDAY_OPEN_S))    # Sunday before the open
+    is_open &= ~((weekday <= 3) & in_break)  # Mon–Thu daily break
+    is_open &= ~((weekday == 4) & (sod >= BREAK_START_S))  # Friday close
+    is_open &= weekday != 5  # Saturday
+    is_open &= ~((weekday == 6) & (sod < SUNDAY_OPEN_S))  # Sunday before the open
     return is_open
 
 
@@ -90,7 +93,9 @@ def _schedule_mask(t_sec: np.ndarray, schedule: Schedule | None) -> np.ndarray:
     uniq, inverse = np.unique(minutes, return_inverse=True)
     per_minute = np.fromiter(
         (bool(schedule(datetime.fromtimestamp(int(m) * 60, tz=UTC))) for m in uniq),
-        dtype=bool, count=len(uniq))
+        dtype=bool,
+        count=len(uniq),
+    )
     return per_minute[inverse]
 
 
@@ -144,7 +149,8 @@ def _spread(t_sec: np.ndarray, rng: np.random.Generator) -> np.ndarray:
         default=0.28,
     )
     after_reopen = ((weekday != 6) & (sod >= REOPEN_S) & (sod < REOPEN_S + WIDE_AFTER_REOPEN_S)) | (
-        (weekday == 6) & (sod >= SUNDAY_OPEN_S) & (sod < SUNDAY_OPEN_S + WIDE_AFTER_REOPEN_S))
+        (weekday == 6) & (sod >= SUNDAY_OPEN_S) & (sod < SUNDAY_OPEN_S + WIDE_AFTER_REOPEN_S)
+    )
     base = np.where(after_reopen, 0.70, base)
     # Asian hours wander between 30 and 40 pips; elsewhere ± 1–2 pips of noise
     asian_noise = rng.uniform(-0.05, 0.05, len(t_sec))
@@ -213,9 +219,15 @@ def generate_gold_ticks(
     ``daily_vol`` is the one-day standard deviation of log returns in the *normal* regime (0.018 ≈
     29 % annualised, the 2026 level). ``schedule`` overrides the built-in winter calendar.
     """
-    arr = generate_gold_tick_arrays(start_utc, days, seed, base_price=base_price,
-                                    daily_vol=daily_vol, ticks_per_second=ticks_per_second,
-                                    schedule=schedule)
+    arr = generate_gold_tick_arrays(
+        start_utc,
+        days,
+        seed,
+        base_price=base_price,
+        daily_vol=daily_vol,
+        ticks_per_second=ticks_per_second,
+        schedule=schedule,
+    )
     times = arr.time_msc.tolist()
     bids = arr.bid.tolist()
     asks = arr.ask.tolist()
@@ -234,7 +246,13 @@ def generate_bars(
     schedule: Schedule | None = None,
 ) -> pd.DataFrame:
     """Synthetic bars frame (default 1 m) built with the production resampler from synthetic ticks."""
-    arr = generate_gold_tick_arrays(start_utc, days, seed, base_price=base_price,
-                                    daily_vol=daily_vol, ticks_per_second=ticks_per_second,
-                                    schedule=schedule)
+    arr = generate_gold_tick_arrays(
+        start_utc,
+        days,
+        seed,
+        base_price=base_price,
+        daily_vol=daily_vol,
+        ticks_per_second=ticks_per_second,
+        schedule=schedule,
+    )
     return bars_from_arrays(arr, seconds)

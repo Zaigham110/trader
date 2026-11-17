@@ -144,6 +144,18 @@ cd $HOME\trader
    If `--real` reports the symbol was not found, add `--symbol <name from step 5>`.
    Send me the three files in `reports\mt5\`.
 
+   If `llm-check` fails with a 400 error, the lines under it quote the API's own message. "Credit
+   balance is too low" means the Max plan's monthly API credit is not linked to the Console
+   organization the key belongs to: in the Console open *Settings → Billing* and confirm the
+   organization shows the promotional credit; if not, create the key in the organization that does
+   (step 9). Any other message: send me the lines.
+
+14b. **Fill the bar history from the terminal** (fast, no download; the features need about 20 days):
+
+```powershell
+.venv\Scripts\goldctl backfill --real --days 60 --db state\demo.sqlite
+```
+
 15. **One month of history.** Personal Area → *?* menu → *Tools & Services* → *Tick History* →
     XAUUSD → last full month → download the CSV. Then:
 

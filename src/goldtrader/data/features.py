@@ -19,6 +19,7 @@ rolling percentile of the same quantity, ``atr_pctile``, is provided alongside f
 gating (ARCHITECTURE §2.2 ``features``: "regime labels (ATR percentile, realised-vol percentile,
 trend state)").
 """
+
 from __future__ import annotations
 
 import math
@@ -32,16 +33,32 @@ TRADING_HOURS_PER_DAY = 23.0
 TRADING_DAYS_PER_WEEK = 5
 WEEKS_PER_YEAR = 52
 TRADING_SECONDS_PER_YEAR = TRADING_HOURS_PER_DAY * 3600 * TRADING_DAYS_PER_WEEK * WEEKS_PER_YEAR
-PIP = 0.01                       # XAUUSD pip size on Exness (Verified, 02_exness_mt5.md §5)
+PIP = 0.01  # XAUUSD pip size on Exness (Verified, 02_exness_mt5.md §5)
 
-ATR_PCT_CALM_DAILY = 0.012       # Assumption: < 1.2 % of price per day → calm
-ATR_PCT_STRESS_DAILY = 0.025     # Assumption: > 2.5 % of price per day → stress
-SPREAD_WIDE_MULTIPLE = 2.0       # spread_regime: wide when > 2 × same-hour median (RiskLimits default)
+ATR_PCT_CALM_DAILY = 0.012  # Assumption: < 1.2 % of price per day → calm
+ATR_PCT_STRESS_DAILY = 0.025  # Assumption: > 2.5 % of price per day → stress
+SPREAD_WIDE_MULTIPLE = 2.0  # spread_regime: wide when > 2 × same-hour median (RiskLimits default)
 
 FEATURE_COLUMNS: tuple[str, ...] = (
-    "mid_close", "mid_high", "mid_low", "tr", "atr", "atr_pct", "atr_pct_daily", "atr_pctile",
-    "ema_fast", "ema_slow", "trend_state", "log_ret", "rv", "rv_pctile", "spread_pips", "hour_utc",
-    "spread_median_hour", "spread_regime", "regime",
+    "mid_close",
+    "mid_high",
+    "mid_low",
+    "tr",
+    "atr",
+    "atr_pct",
+    "atr_pct_daily",
+    "atr_pctile",
+    "ema_fast",
+    "ema_slow",
+    "trend_state",
+    "log_ret",
+    "rv",
+    "rv_pctile",
+    "spread_pips",
+    "hour_utc",
+    "spread_median_hour",
+    "spread_regime",
+    "regime",
 )
 
 
@@ -66,7 +83,8 @@ def true_range(high: pd.Series, low: pd.Series, close: pd.Series) -> pd.Series:
     """Wilder true range; the first bar (no previous close) uses ``high - low``. Causal."""
     prev_close = close.shift(1)
     tr = pd.concat([high - low, (high - prev_close).abs(), (low - prev_close).abs()], axis=1).max(
-        axis=1)
+        axis=1
+    )
     tr.iloc[:1] = (high - low).iloc[:1]
     return tr
 
@@ -106,14 +124,16 @@ def rolling_pctile(x: pd.Series, window: int, min_periods: int) -> pd.Series:
     return x.rolling(window, min_periods=min_periods).rank(pct=True)
 
 
-def spread_median_by_hour(spread: pd.Series, hour: pd.Series, window_bars: int,
-                          min_periods: int) -> pd.Series:
+def spread_median_by_hour(
+    spread: pd.Series, hour: pd.Series, window_bars: int, min_periods: int
+) -> pd.Series:
     """Rolling median of ``spread`` over *prior* bars that share the same UTC hour.
 
     For each hour-of-day the series is shifted by one bar (the current bar is excluded) and a
     trailing median over ``window_bars`` same-hour bars is taken, so a value at row ``k`` uses rows
     ``< k`` only. NaN until ``min_periods`` same-hour bars have been seen.
     """
+
     def _per_hour(s: pd.Series) -> pd.Series:
         return s.shift(1).rolling(window_bars, min_periods=min_periods).median()
 
@@ -174,8 +194,7 @@ def add_features(
     out["atr"] = wilder_atr(out["tr"], atr_period)
     out["atr_pct"] = out["atr"] / mid_close
     out["atr_pct_daily"] = out["atr_pct"] * math.sqrt(bpd)
-    out["atr_pctile"] = rolling_pctile(out["atr_pct"], hist_window,
-                                       min_periods=max(atr_period, 2))
+    out["atr_pctile"] = rolling_pctile(out["atr_pct"], hist_window, min_periods=max(atr_period, 2))
 
     out["ema_fast"] = ema(mid_close, ema_fast)
     out["ema_slow"] = ema(mid_close, ema_slow)
@@ -183,7 +202,8 @@ def add_features(
 
     out["log_ret"] = np.log(mid_close).diff()
     out["rv"] = out["log_ret"].rolling(rv_window, min_periods=rv_window).std(ddof=1) * math.sqrt(
-        bars_per_year(secs))
+        bars_per_year(secs)
+    )
     out["rv_pctile"] = rolling_pctile(out["rv"], hist_window, min_periods=max(rv_window, 2))
 
     spread = out["ask_close"] - out["bid_close"]
@@ -192,18 +212,24 @@ def add_features(
     hour = _hour_utc(out)
     out["hour_utc"] = hour
     per_hour_window = max(round(spread_hist_days * bph), 1)
-    out["spread_median_hour"] = spread_median_by_hour(spread, hour, per_hour_window,
-                                                      min_periods=max(int(bph), 1))
+    out["spread_median_hour"] = spread_median_by_hour(
+        spread, hour, per_hour_window, min_periods=max(int(bph), 1)
+    )
     med = out["spread_median_hour"]
-    wide_at = SPREAD_WIDE_MULTIPLE * med * (1.0 + 1e-9)   # tolerance: exactly 2x is still normal
-    regime_spread = np.where(med.isna(), "unknown",
-                             np.where(spread <= wide_at, "normal", "wide"))
+    wide_at = SPREAD_WIDE_MULTIPLE * med * (1.0 + 1e-9)  # tolerance: exactly 2x is still normal
+    regime_spread = np.where(med.isna(), "unknown", np.where(spread <= wide_at, "normal", "wide"))
     out["spread_regime"] = pd.Series(regime_spread, index=out.index, dtype="str")
 
     daily = out["atr_pct_daily"]
-    regime = np.where(daily.isna(), "unknown",
-                      np.where(daily < ATR_PCT_CALM_DAILY, "calm",
-                               np.where(daily > ATR_PCT_STRESS_DAILY, "stress", "normal")))
+    regime = np.where(
+        daily.isna(),
+        "unknown",
+        np.where(
+            daily < ATR_PCT_CALM_DAILY,
+            "calm",
+            np.where(daily > ATR_PCT_STRESS_DAILY, "stress", "normal"),
+        ),
+    )
     out["regime"] = pd.Series(regime, index=out.index, dtype="str")
     out.attrs["bar_seconds"] = secs
     return out
@@ -226,10 +252,13 @@ def donchian(df: pd.DataFrame, n: int) -> pd.DataFrame:
     if n < 1:
         raise ValueError("n must be >= 1")
     _, mid_high, mid_low = _mid_columns(df)
-    return pd.DataFrame({
-        "donchian_high": mid_high.rolling(n, min_periods=n).max().shift(1),
-        "donchian_low": mid_low.rolling(n, min_periods=n).min().shift(1),
-    }, index=df.index)
+    return pd.DataFrame(
+        {
+            "donchian_high": mid_high.rolling(n, min_periods=n).max().shift(1),
+            "donchian_low": mid_low.rolling(n, min_periods=n).min().shift(1),
+        },
+        index=df.index,
+    )
 
 
 def session_high_low(df: pd.DataFrame, start_hour: int, end_hour: int) -> pd.DataFrame:
@@ -264,11 +293,14 @@ def session_high_low(df: pd.DataFrame, start_hour: int, end_hour: int) -> pd.Dat
     hi = mid_high.where(pd.Series(in_window, index=df.index))
     lo = mid_low.where(pd.Series(in_window, index=df.index))
     keys = pd.Series(session_day, index=df.index)
-    out = pd.DataFrame({
-        "session_high": hi.groupby(keys.to_numpy(), group_keys=False).cummax(),
-        "session_low": lo.groupby(keys.to_numpy(), group_keys=False).cummin(),
-        "session_complete": complete,
-    }, index=df.index)
+    out = pd.DataFrame(
+        {
+            "session_high": hi.groupby(keys.to_numpy(), group_keys=False).cummax(),
+            "session_low": lo.groupby(keys.to_numpy(), group_keys=False).cummin(),
+            "session_complete": complete,
+        },
+        index=df.index,
+    )
     # cummax/cummin skip NaN but leave NaN where the running value does not exist yet; carry the
     # completed range forward within the day.
     out["session_high"] = out["session_high"].groupby(keys.to_numpy(), group_keys=False).ffill()

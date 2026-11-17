@@ -140,3 +140,18 @@ recorded default the owner has not overridden (marked "Default").
   high-frequency tick storage; unnecessary here.
 - **Consequences:** a thin repository layer so the engine can move to Postgres later; nightly backups
   are a file copy.
+
+## D-055 — Spec read from the account is authoritative; "pip" stays 0.01 USD (Default)
+- **Date:** 2026-11-17. **Reasons:** `spec-dump --real` on the owner's demo showed digits 3 /
+  point 0.001 / tick value 0.1 USD, not the 2-decimal quoting the published Exness pages imply. All
+  code paths size and place stops in points from the stored `symbol_specs` row; the docs keep
+  "pip = 0.01 USD" only for human money math. The fake terminal and `goldctl` defaults were changed to
+  the verified values so tests and the real account agree.
+- **Also recorded:** Exness returns 10011/10006 "bad stops" and 10014 where the MQL5 docs say 10016 and
+  10038; the on-account probes accept both, and the execution engine treats any rejection whose comment
+  mentions stops or volume as fatal (no retry), because retrying the same request cannot succeed.
+- **Alternatives:** redefine pip as 0.001 everywhere (confusing against Exness's own pages); keep the
+  2-decimal defaults (tests would pass against a terminal that does not exist).
+- **Consequences:** `MT5_EXNESS_INTEGRATION.md` §2 and §8 hold the verified table; KU-001, KU-012,
+  KU-019 closed, KU-003 partly closed.
+
