@@ -702,7 +702,7 @@ def doctor(
     import platform
     import sys
 
-    from goldtrader.secrets import KNOWN, get_secret
+    from goldtrader.secrets import KNOWN, get_secret, inspect_secret
 
     rows: list[tuple[str, bool, str]] = []
     rows.append(("python", sys.version_info >= (3, 12), platform.python_version()))
@@ -746,13 +746,15 @@ def doctor(
     for name in KNOWN:
         if name == "ALLOW_LIVE":
             continue
-        present = get_secret(name, required=False) is not None
+        value = get_secret(name, required=False)
+        present = value is not None
         required = name in ("MT5_LOGIN", "MT5_PASSWORD", "MT5_SERVER")
+        summary, problems = inspect_secret(value)
         rows.append(
             (
                 f"secret {name}",
-                present or not required,
-                "present"
+                (present and not problems) or (not present and not required),
+                f"present, {summary}" + (f"; PROBLEM: {'; '.join(problems)}" if problems else "")
                 if present
                 else ("MISSING (required)" if required else "absent (optional)"),
             )
@@ -866,9 +868,18 @@ def report(
 
 
 @app.command("secret-set")
-def secret_set(name: str) -> None:
-    """Store a secret in the OS credential store (prompts; the value is never echoed)."""
-    from goldtrader.secrets import KNOWN, set_secret
+def secret_set(
+    name: str,
+    from_clipboard: bool = typer.Option(
+        False, "--from-clipboard", help="read the value from the clipboard instead of prompting"
+    ),
+) -> None:
+    """Store a secret in the OS credential store (prompts; the value is never echoed).
+
+    On the Windows console a hidden prompt cannot receive Ctrl+V (it stores the character 0x16):
+    copy the value, then run with --from-clipboard, or right-click in the window to paste.
+    """
+    from goldtrader.secrets import KNOWN, inspect_secret, set_secret
 
     cleaned = "".join(ch for ch in name if ch.isalnum() or ch == "_").upper()
     if cleaned not in KNOWN:
@@ -876,12 +887,41 @@ def secret_set(name: str) -> None:
             f"unknown secret name {name!r} (read as {cleaned!r}); choose one of {KNOWN}", err=True
         )
         raise typer.Exit(code=1)
-    value = typer.prompt(f"value for {cleaned}", hide_input=True).strip()
-    if not value:
-        typer.echo("empty value; nothing stored", err=True)
+    if from_clipboard:
+        value = _read_clipboard()
+    else:
+        value = typer.prompt(
+            f"value for {cleaned} (or re-run with --from-clipboard)", hide_input=True
+        )
+    value = value.strip().strip("\"'")
+    summary, problems = inspect_secret(value)
+    if not value or problems:
+        typer.echo(
+            f"nothing stored: value {summary} looks wrong ({'; '.join(problems) or 'empty'}). "
+            "Copy the value, then run: goldctl secret-set "
+            f"{cleaned} --from-clipboard",
+            err=True,
+        )
         raise typer.Exit(code=1)
     where = set_secret(cleaned, value)
-    typer.echo(f"{cleaned} stored in {where}")
+    typer.echo(f"{cleaned} stored in {where} ({summary})")
+
+
+def _read_clipboard() -> str:
+    """Clipboard text via the platform's own tool; nothing is printed."""
+    import subprocess
+
+    if sys.platform == "win32":
+        cmd = ["powershell", "-NoProfile", "-Command", "Get-Clipboard -Raw"]
+    elif sys.platform == "darwin":
+        cmd = ["pbpaste"]
+    else:
+        cmd = ["xclip", "-selection", "clipboard", "-o"]
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=10).stdout
+    except Exception as e:  # noqa: BLE001
+        typer.echo(f"could not read the clipboard: {e}", err=True)
+        raise typer.Exit(code=1) from e
 
 
 @app.command("backfill")

@@ -46,6 +46,31 @@ def get_secret(name: str, *, required: bool = True) -> str | None:
     return None
 
 
+def inspect_secret(value: str | None) -> tuple[str, list[str]]:
+    """Describe a secret's shape without revealing it: (summary, problems).
+
+    Catches the Windows console paste failure where a hidden-input prompt receives Ctrl+V as the
+    single character 0x16 (observed 2026-11-17), stray quotes and whitespace, and the wrong kind of
+    Anthropic credential.
+    """
+    if value is None:
+        return "absent", []
+    problems: list[str] = []
+    if value != value.strip():
+        problems.append("leading/trailing whitespace")
+    if any(ord(c) < 32 or ord(c) == 127 for c in value):
+        problems.append("control characters (Ctrl+V was typed into the prompt, not pasted)")
+    elif any(ord(c) > 126 for c in value):
+        problems.append("non-ASCII characters (paste artefact)")
+    if len(value) >= 2 and value[0] in "'\"" and value[-1] in "'\"":
+        problems.append("wrapped in quotes")
+    if len(value.strip()) <= 2:
+        problems.append("too short to be a real value")
+    if value.startswith("sk-ant-oat"):
+        problems.append("Claude Code OAuth token; the API needs a Console key (sk-ant-api...)")
+    return f"length {len(value)}", problems
+
+
 def set_secret(name: str, value: str) -> str:
     """Store in the OS credential store; returns where it went. Never echo the value."""
     import keyring  # type: ignore[import-not-found]

@@ -110,6 +110,19 @@ cd $HOME\trader
 .venv\Scripts\goldctl secret-set GATEWAY_TOKEN
 ```
 
+   **Pasting into the hidden prompt does not work on Windows.** Ctrl+V is stored as a control
+   character and the value is wrong (the doctor then shows `PROBLEM: control characters`). For any
+   value you copy (API key, bot token, server name), copy it first and run the command with
+   `--from-clipboard`, which reads the clipboard without showing anything:
+
+```powershell
+.venv\Scripts\goldctl secret-set ANTHROPIC_API_KEY --from-clipboard
+```
+
+   Typing short values by hand (login, chat id) works in the prompt. `goldctl doctor` prints each
+   secret's length and flags a wrong shape; a healthy Console API key is about 108 characters and
+   starts with `sk-ant-api03`.
+
    `MT5_SERVER` is the server name shown in MT5's login window (for example `Exness-MT5Trial7`).
    `GATEWAY_TOKEN` is any random text of at least 32 characters you make up (for example from
    https://www.random.org/strings/ or by typing 40 random letters); both processes read it.
