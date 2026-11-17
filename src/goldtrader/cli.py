@@ -395,7 +395,7 @@ def brain(
     config: Path = typer.Option(Path("config/demo.yaml")),
     db: Path = typer.Option(Path("state/demo.sqlite")),
     gateway_url: str = "http://127.0.0.1:8750",
-    provider: str = typer.Option("fake", help="fake | anthropic (Phase 5)"),
+    provider: str = typer.Option("fake", help="fake | anthropic | none"),
     minutes: float | None = None,
 ) -> None:
     """Run the brain process: scheduler, bots, decision cycle, trade review, alerts."""
@@ -433,10 +433,13 @@ def brain(
             typer.echo("provider=fake: bots return their deterministic fallbacks (D-031)", err=True)
         elif provider == "none":
             model = None
+        elif provider == "anthropic":
+            from goldtrader.llm.anthropic_provider import AnthropicProvider
+
+            model = AnthropicProvider(cfg.llm)
+            typer.echo("provider=anthropic", err=True)
         else:
-            typer.echo(
-                "the Anthropic provider arrives in Phase 5 (D-031); use --provider fake", err=True
-            )
+            typer.echo(f"unknown provider {provider!r}; use fake | anthropic | none", err=True)
             raise typer.Exit(code=2)
         sender = None
         chat_id = get_secret("TELEGRAM_OWNER_CHAT_ID", required=False)

@@ -8,6 +8,14 @@ param(
   [string]$Db = "state\demo.sqlite",
   [string]$Provider = "fake"      # "anthropic" once Phase 5 is approved for demo
 )
+$ErrorActionPreference = "Stop"   # a failed registration must stop the script, not print "Registered"
+$admin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
+  [Security.Principal.WindowsBuiltInRole]::Administrator)
+if (-not $admin) {
+  Write-Host "This window is not running as administrator, so the tasks cannot be registered." -ForegroundColor Red
+  Write-Host "Open one with:  Start-Process powershell -Verb RunAs   (answer Yes), then run this script again there."
+  exit 1
+}
 $py = Join-Path $Repo ".venv\Scripts\goldctl.exe"
 if (-not (Test-Path $py)) { throw "goldctl not found at $py; create the venv first" }
 
