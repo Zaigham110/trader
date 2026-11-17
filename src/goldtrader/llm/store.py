@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import zlib
 from typing import Any
 
 from goldtrader.db.connect import now_ms
@@ -105,6 +106,14 @@ class LLMStore:
                 failure_reason,
                 _stable(output) if output is not None else None,
             ),
+        )
+
+    def record_input(self, run_id: str, agent: str, created_ms: int, messages: Any) -> None:
+        """The exact messages sent to the model for a run (D-060), zlib-compressed JSON."""
+        self.c.execute(
+            "INSERT OR REPLACE INTO agent_inputs(run_id, agent, created_ms, messages_z) "
+            "VALUES (?,?,?,?)",
+            (run_id, agent, created_ms, zlib.compress(_stable(messages).encode("utf-8"))),
         )
 
     def get_run(self, run_id: str) -> sqlite3.Row | None:

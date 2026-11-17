@@ -138,6 +138,7 @@ class BotContext:
     news_events: list[dict[str, Any]] = field(default_factory=list)
     open_position: dict[str, Any] | None = None
     calibration_line: str = ""
+    positioning_line: str = ""  # weekly futures positioning (D-060), slow context
     risk_budget: int | None = None
     minutes_to_event: float | None = None
     next_event: str | None = None

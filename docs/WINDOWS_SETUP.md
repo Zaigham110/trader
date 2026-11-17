@@ -201,6 +201,7 @@ powershell -ExecutionPolicy Bypass -File scripts\windows\install-tasks.ps1 -Prov
 Start-ScheduledTask goldtrader-gateway
 Start-Sleep 15
 Start-ScheduledTask goldtrader-brain
+Start-ScheduledTask goldtrader-dashboard
 ```
 
 18. **Check.** In a normal PowerShell:
@@ -212,7 +213,9 @@ cd $HOME\trader
 
    Expected: `gateway ok`, `brain ok`, `open incidents: 0`, `gateway: session=...`. In Telegram
    send `/status` to your bot; it answers within a few seconds. Then ask it in plain words
-   "what are my risk limits?" and check the reply has a `source:` line.
+   "what are my risk limits?" and check the reply has a `source:` line. Then open
+   http://127.0.0.1:8760 in a browser on this PC: the read-only dashboard shows the price chart, the
+   account and what each bot last did. It cannot trade or change settings.
 
 19. **Nightly backup task** (administrator PowerShell, once):
 

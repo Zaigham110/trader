@@ -85,7 +85,9 @@ account?" and confirm the answer carries a `source:` line.
 
 ## 6. Daily (two minutes)
 
-- `goldctl status` or Telegram `/status`.
+- `goldctl status` or Telegram `/status`, or open the dashboard at http://127.0.0.1:8760 on the PC
+  (read-only: price chart, account, each bot's last output, latest decision). If the page does not
+  load: `Start-ScheduledTask goldtrader-dashboard`, or run `.venv\Scripts\goldctl dashboard`.
 - Read any alert. A critical alert (kill switch, stop missing, spec change) needs your acknowledgement
   in Telegram and a message to me with the text.
 

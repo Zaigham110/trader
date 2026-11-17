@@ -4,6 +4,7 @@ heartbeat. No MT5 access; the gateway is reached only through its loopback API (
 
 from __future__ import annotations
 
+import json
 import logging
 import threading
 import time
@@ -18,14 +19,18 @@ from goldtrader.config.schema import Config
 from goldtrader.db.repo import Repo
 from goldtrader.bots.common import BotContext
 from goldtrader.feeds.calendar_store import CalendarRefresher, CalendarStore
+from goldtrader.feeds.cot import REFRESH_HOURS, CotRefresher, CotStore
 from goldtrader.feeds.news import NewsFetcher, NewsStore, news_for_research
 from goldtrader.gateway.api import GatewayClient
 from goldtrader.llm.provider import ModelProvider
 from goldtrader.llm.store import LLMStore
 from goldtrader.notify.alerts import AlertDispatcher
 from goldtrader.notify.telegram import TelegramSender
+from goldtrader.report import veto
 
 log = logging.getLogger(__name__)
+
+PAPER_EXPERIMENT = "paper"  # shadow_trades.experiment_id of owner paper candidates (D-059)
 
 
 class BrainService:
@@ -43,6 +48,7 @@ class BrainService:
         chat_updates=None,
         config_path=None,
         feed_fetch=None,
+        cot_fetch=None,
     ) -> None:
         self.cfg = cfg
         self.repo = repo
@@ -114,6 +120,8 @@ class BrainService:
             trades_fn=self._recent_trades,
             lessons_fn=lambda: self.registry.lessons(5),
             clock_ms=self.clock_ms,
+            event_fn=self._next_event,
+            positioning_fn=lambda: self.cot_store.line(self.clock_ms()),
         )
         self.dispatcher = None
         if sender is not None and owner_chat_id is not None:
@@ -125,6 +133,15 @@ class BrainService:
             )
         # feeds (D-038): news -> Research bot; calendar -> events table read by the gateway
         self.news_store = NewsStore(repo.c)
+        # slow positioning context (D-060): CFTC gold futures report, polled twice a day
+        self.cot_store = CotStore(repo.c)
+        self.cot_refresher = CotRefresher(
+            self.cot_store,
+            self.clock_ms,
+            # a caller that injects the feed transport (tests) must not reach the network
+            fetch=cot_fetch or ((lambda _url: "[]") if feed_fetch is not None else None),
+        )
+        self.last_cot: tuple[int, str | None] = (0, None)
         self.calendar_store = CalendarStore(repo.c)
         fetch_kw = {"fetch": feed_fetch} if feed_fetch is not None else {}
         self.news_fetcher = NewsFetcher(cfg.feeds, self.news_store, self.clock_ms, **fetch_kw)
@@ -158,6 +175,21 @@ class BrainService:
                 features_fn=lambda: self.feats.features(self._last_state),
                 config_path=config_path,
             )
+        # dashboard chat (D-057): questions typed into the local page; needs no Telegram
+        self.dashboard_chat = None
+        if cfg.chat.enabled:
+            from goldtrader.chat.local import DashboardChatService
+
+            self.dashboard_chat = DashboardChatService(
+                cfg,
+                repo.c,
+                provider,
+                self.store,
+                gateway,
+                self.clock_ms,
+                features_fn=lambda: self.feats.features(self._last_state),
+                config_path=config_path,
+            )
         self.scheduler = Scheduler(clock=lambda: self.clock_ms() / 1000.0)
         self.scheduler.add(
             Job("cycle", self._cycle_job, every_seconds=cycle_every_s, only_when=self._gateway_open)
@@ -179,6 +211,8 @@ class BrainService:
             )
         )
         self.scheduler.add(Job("learning", self._learning_job, daily_at_utc="23:30"))
+        self.scheduler.add(Job("cot", self._cot_job, every_seconds=REFRESH_HOURS * 3600))
+        self.scheduler.add(Job("veto_report", self._veto_report_job, every_seconds=900))
         self.scheduler.add(Job("shadow", self._shadow_job, every_seconds=60))
         self.scheduler.add(Job("review", self._review_job, every_seconds=60))
         self.scheduler.add(Job("alerts", self._alerts_job, every_seconds=10))
@@ -187,6 +221,8 @@ class BrainService:
             self.scheduler.add(
                 Job("chat", self._chat_job, every_seconds=max(1, cfg.chat.poll_seconds))
             )
+        if self.dashboard_chat is not None:
+            self.scheduler.add(Job("dashboard_chat", self._dashboard_chat_job, every_seconds=1))
         self.last_cycle = None
         self.reviewed: set[str] = set()
         self.last_news: dict = {}
@@ -236,6 +272,7 @@ class BrainService:
 
     def _shadow_job(self) -> None:
         """Feed each newly closed 1-minute bar to the shadow ledger with the session state."""
+        self._sync_paper_candidates()
         if not self.learning.shadow.bundles:  # a property (list of ids), not a method
             return
         df = self.feats._frame()
@@ -272,50 +309,62 @@ class BrainService:
         self.last_calendar = self.calendar_refresher.run_once()
 
     def _chat_job(self) -> None:
-        if self.chat is not None:
-            self.chat.poll_once(timeout_s=0)
-
-    def _news_job(self) -> None:
-        """Fetch feeds, run the Research bot on unprocessed items, mark them processed."""
-        self.last_news = self.news_fetcher.run_once()
-        items = news_for_research(self.news_store, limit=20)
-        if not items:
+        """Poll Telegram. A failed poll blocks this single-threaded loop for the whole network
+        timeout, so after a failure wait a minute before trying again."""
+        if self.chat is None:
             return
         now = self.clock_ms()
-        ctx = BotContext(
-            features=self.feats.features(self._last_state),
-            gateway_state=self._last_state,
-            signal_side=0,
-            now_ms=now,
-            cfg=self.cfg,
-            news_items=items,
-        )
-        self.registry.run("research", ctx)
-        self.news_store.mark_processed([i["item_id"] for i in items], now)
+        if now < getattr(self, "_chat_retry_ms", 0):
+            return
+        if self.chat.poll_once(timeout_s=0) == ["error:get_updates"]:
+            self._chat_retry_ms = now + 60_000
 
-    def _is_sunday(self) -> bool:
-        return datetime.fromtimestamp(self.clock_ms() / 1000, UTC).weekday() == 6
+    def _sync_paper_candidates(self) -> None:
+        """Register the owner's active paper candidates (D-059) with the shadow ledger and drop
+        the ones switched off. Simulation only: the ledger has no path to an order."""
+        try:
+            rows = self.repo.c.execute(
+                "SELECT bundle_id, kind, params_json, active FROM paper_candidates"
+            ).fetchall()
+        except Exception:  # noqa: BLE001 - table missing on an old database
+            return
+        have = set(self.learning.shadow.bundles)
+        for r in rows:
+            bid = r["bundle_id"]
+            if r["active"] and bid not in have:
+                try:
+                    self.learning.shadow.register(
+                        PAPER_EXPERIMENT, bid, r["kind"], json.loads(r["params_json"])
+                    )
+                    log.info("paper candidate registered: %s", bid)
+                except Exception:  # noqa: BLE001 - a bad row must not stop the shadow feed
+                    log.exception("paper candidate %s could not be registered", bid)
+            elif not r["active"] and bid in have:
+                self.learning.shadow.unregister(bid)
 
-    def _weekly_research_job(self) -> None:
-        """Weekly hypothesis generation (LEARNING_SYSTEM §3.1); intake happens in the learning job."""
+    def _cot_job(self) -> None:
+        self.last_cot = self.cot_refresher.run_once()
+
+    def _veto_report_job(self) -> None:
+        """Refresh the stored "do the AI vetoes help?" report the dashboard reads (D-060)."""
         now = self.clock_ms()
-        ctx = BotContext(
-            features=self.feats.features(self._last_state),
-            gateway_state=self._last_state,
-            signal_side=0,
-            now_ms=now,
-            cfg=self.cfg,
-            recent_trades=self._recent_trades(),
-            lessons=self.registry.lessons(10),
+        veto.store(
+            self.repo.c, veto.REPORT_NAME, veto.build(self.repo.c, self.cfg, self.strat, now), now
         )
-        self.registry.run("weekly_research", ctx)
 
-    def _calendar_job(self) -> None:
-        self.last_calendar = self.calendar_refresher.run_once()
+    def _next_event(self) -> tuple[str, float] | None:
+        """Next high-impact calendar event and the minutes to it, for the Strategy and
+        Risk-advisor context (AGENTS §3.2, §3.3). Without it they always saw "none scheduled"."""
+        try:
+            nxt = self.calendar_store.next_high_impact(self.clock_ms())
+        except Exception:  # noqa: BLE001 - a calendar problem must not stop the cycle
+            log.exception("next event lookup failed")
+            return None
+        return (nxt[0].title, float(nxt[1])) if nxt is not None else None
 
-    def _chat_job(self) -> None:
-        if self.chat is not None:
-            self.chat.poll_once(timeout_s=0)
+    def _dashboard_chat_job(self) -> None:
+        if self.dashboard_chat is not None:
+            self.dashboard_chat.poll_once(timeout_s=0)
 
     def _alerts_job(self) -> None:
         if self.dispatcher is not None:

@@ -15,6 +15,7 @@ The model never receives a confirmation token, a credential or raw news text her
 from __future__ import annotations
 
 import json
+import logging
 import re
 import sqlite3
 from collections.abc import Callable
@@ -36,6 +37,17 @@ CHAT_PROMPT_VERSION = 1
 DEEP_PREFIX = "/deep"
 MAX_REPLY_CHARS = 3500
 MAX_USER_CHARS = 2000
+MAX_TOOL_CALLS = 8
+REPEAT_NOTE = (
+    "You already called this tool with the same input in this turn; the result has not changed. "
+    "Do not call it again. Write the final answer now from the results you have."
+)
+LIMIT_NOTE = (
+    "Tool limit for one answer reached. Do not call more tools. Write the final answer now from "
+    "the results you have, and say what you could not check."
+)
+
+log = logging.getLogger("goldtrader.chat")
 
 SAFE_MESSAGE = (
     "I could not produce a verified answer to that ({reason}). Nothing was changed. "
@@ -83,9 +95,12 @@ class ToolTracker:
 
     calls: list[str] = field(default_factory=list)
     chat_id: int | None = None
+    seen: set[str] = field(default_factory=set)
+    max_calls: int = MAX_TOOL_CALLS
 
     def reset(self, chat_id: int | None) -> None:
         self.calls.clear()
+        self.seen.clear()
         self.chat_id = chat_id
 
     def wrap(self, tool: Tool) -> Tool:
@@ -93,7 +108,20 @@ class ToolTracker:
         inner = tool.handler
 
         def handler(inp: dict[str, Any]) -> Any:
+            # A model that keeps re-reading the same data never answers and burns the run's cost
+            # cap (seen live: get_scorecard nine times in one run). Repeats and calls past the
+            # limit get an instruction instead of data; prepare_action is never blocked.
+            key = name + dumps(inp)
+            if name != "prepare_action":
+                if key in self.seen:
+                    log.info("chat tool repeat refused: %s %s", name, dumps(inp)[:200])
+                    return {"status": "duplicate_call", "note": REPEAT_NOTE}
+                if len(self.calls) >= self.max_calls:
+                    log.info("chat tool limit reached: %s", name)
+                    return {"status": "tool_limit_reached", "note": LIMIT_NOTE}
+            self.seen.add(key)
             self.calls.append(name)
+            log.info("chat tool: %s %s", name, dumps(inp)[:200])
             return inner(inp)
 
         return Tool(tool.spec, handler)
@@ -190,7 +218,7 @@ def chat_spec(
         tools=wrapped,
         check=check,
         timeout_s=float(tier_cfg.timeout_s),
-        max_turns=8,
+        max_turns=16,  # broad questions ("why no trade?") read 8+ tools one per turn
         max_cost_usd=float(tier_cfg.max_cost_usd),
         effort=tier_cfg.effort,
         max_tokens=4096,

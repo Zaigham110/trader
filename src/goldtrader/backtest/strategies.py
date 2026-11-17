@@ -117,8 +117,72 @@ class BreakoutSession:
         return SignalFrame(side, self.stop_atr, self.target_atr)
 
 
+@dataclass(frozen=True)
+class TrendHTF:
+    """Trend entries decided on N-minute bars, executed on the 1-minute frame (D-059 research).
+
+    The 1-minute mid closes are grouped into `minutes`-long bars; EMAs are computed on the closes
+    of *completed* groups only, and a signal appears on the 1-minute bar that completes a group, so
+    nothing looks ahead. `on_cross=True` signals only when the fast EMA crosses the slow one;
+    otherwise it uses the same trend state as `TrendATR` (EMA order and price beyond the fast EMA).
+
+    `stop_atr` / `target_atr` are multiples of the frame's own (1-minute) ATR, which is what the
+    engine sizes with; a stop meant for an N-minute bar is roughly sqrt(N) times larger.
+    """
+
+    id: str = "trend_htf_v1"
+    kind: str = "trend_htf"
+    minutes: int = 15
+    ema_fast: int = 20
+    ema_slow: int = 50
+    stop_atr: float = 4.0
+    target_atr: float = 8.0
+    on_cross: bool = True
+
+    def signals(self, df: pd.DataFrame) -> SignalFrame:
+        n = len(df)
+        side = np.zeros(n, dtype=np.int8)
+        span = int(self.minutes) * 60
+        if n < 2 or span < 60:
+            return SignalFrame(side, self.stop_atr, self.target_atr)
+        t = df["time"].to_numpy(dtype=np.int64)
+        mid = (df["bid_close"].to_numpy(dtype=float) + df["ask_close"].to_numpy(dtype=float)) / 2.0
+        bucket = t // span
+        # last 1-minute bar of each group; the final group counts only if it is complete
+        last = np.nonzero(bucket[1:] != bucket[:-1])[0]
+        if (t[-1] + 60) % span == 0:
+            last = np.append(last, n - 1)
+        if len(last) <= self.ema_slow:
+            return SignalFrame(side, self.stop_atr, self.target_atr)
+        close = pd.Series(mid[last])
+        fast = close.ewm(span=self.ema_fast, adjust=False, min_periods=self.ema_fast).mean()
+        slow = close.ewm(span=self.ema_slow, adjust=False, min_periods=self.ema_slow).mean()
+        if self.on_cross:
+            state = np.sign((fast - slow).to_numpy())
+        else:
+            up = (fast > slow) & (close > fast)
+            down = (fast < slow) & (close < fast)
+            state = np.where(up, 1, np.where(down, -1, 0)).astype(float)
+        state = np.nan_to_num(state, nan=0.0).astype(np.int8)
+        prev = np.roll(state, 1)
+        prev[0] = 0
+        flip = (state != prev) & (state != 0) & (prev != 0 if self.on_cross else True)
+        side[last[flip]] = state[flip]
+        return SignalFrame(side, self.stop_atr, self.target_atr)
+
+
 def build_strategy(kind: str, strategy_id: str, params: dict[str, float]) -> Strategy:
     """Factory from config (StrategyConfig.kind/params). Unknown kinds raise."""
+    if kind == "trend_htf":
+        return TrendHTF(
+            id=strategy_id,
+            minutes=int(params.get("minutes", 15)),
+            ema_fast=int(params.get("ema_fast", 20)),
+            ema_slow=int(params.get("ema_slow", 50)),
+            stop_atr=float(params.get("stop_atr", 4.0)),
+            target_atr=float(params.get("target_atr", 8.0)),
+            on_cross=bool(params.get("on_cross", 1.0)),
+        )
     if kind == "flat":
         return FlatStrategy(id=strategy_id)
     if kind == "trend_atr":

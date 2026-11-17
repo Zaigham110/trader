@@ -162,7 +162,7 @@ def test_hang_hits_deadline_and_falls_back():
     assert run.status == "degraded" and run.degraded
     assert "deadline" in run.failure_reason
     assert 250 <= run.latency_ms < 10_000  # upper bound generous for Windows timer granularity
-    assert fake.requests[0].timeout_s <= 0.3
+    assert fake.requests[0].timeout_s <= 0.3 + 1e-6  # float rounding of the monotonic clock
     assert [r["status"] for r in store.calls_for_run(run.run_id)] == ["timeout"]
 
 

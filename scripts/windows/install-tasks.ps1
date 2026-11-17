@@ -1,4 +1,5 @@
-# Registers two Windows Scheduled Tasks that keep the gateway and the brain running (ARCHITECTURE §4).
+# Registers three Windows Scheduled Tasks that keep the gateway, the brain and the read-only
+# dashboard running (ARCHITECTURE §4, D-056).
 # Run once from an elevated PowerShell in the repository root after `uv pip install -e ".[dev,windows]"`.
 # Secrets are read from Windows Credential Manager (goldctl secret-set) or from the task's environment,
 # never from files in the repository.
@@ -29,7 +30,10 @@ Register-ScheduledTask -TaskName "goldtrader-gateway" -Action $gw -Trigger $trig
 $br = New-ScheduledTaskAction -Execute $py -Argument "brain --provider $Provider --config $Config --db $Db" -WorkingDirectory $Repo
 Register-ScheduledTask -TaskName "goldtrader-brain" -Action $br -Trigger $trigger -Settings $settings -Force | Out-Null
 
-Write-Host "Registered goldtrader-gateway and goldtrader-brain. Start them with:"
-Write-Host "  Start-ScheduledTask goldtrader-gateway; Start-Sleep 10; Start-ScheduledTask goldtrader-brain"
+$dash = New-ScheduledTaskAction -Execute $py -Argument "dashboard --config $Config --db $Db" -WorkingDirectory $Repo
+Register-ScheduledTask -TaskName "goldtrader-dashboard" -Action $dash -Trigger $trigger -Settings $settings -Force | Out-Null
+
+Write-Host "Registered goldtrader-gateway, goldtrader-brain and goldtrader-dashboard. Start them with:"
+Write-Host "  Start-ScheduledTask goldtrader-gateway; Start-Sleep 10; Start-ScheduledTask goldtrader-brain; Start-ScheduledTask goldtrader-dashboard"
 Write-Host "Stop:   Stop-ScheduledTask goldtrader-brain; Stop-ScheduledTask goldtrader-gateway"
-Write-Host "Status: .venv\Scripts\goldctl status"
+Write-Host "Status: .venv\Scripts\goldctl status    Dashboard (this PC only): http://127.0.0.1:8760"

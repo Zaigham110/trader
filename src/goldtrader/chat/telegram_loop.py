@@ -207,6 +207,8 @@ def status_text(state: Any, now_ms: int) -> str:
 class ChatService:
     """Owner-only Telegram chat loop (see module docstring)."""
 
+    offset_cursor = OFFSET_CURSOR  # a second transport (the dashboard) keeps its own cursor
+
     def __init__(
         self,
         cfg: Any,
@@ -260,7 +262,7 @@ class ChatService:
     # --- offset cursor -----------------------------------------------------------------------------
     def offset(self) -> int | None:
         row = self.c.execute(
-            "SELECT value FROM notify_cursors WHERE name=?", (OFFSET_CURSOR,)
+            "SELECT value FROM notify_cursors WHERE name=?", (self.offset_cursor,)
         ).fetchone()
         return int(row["value"]) if row else None
 
@@ -268,7 +270,7 @@ class ChatService:
         self.c.execute(
             "INSERT INTO notify_cursors(name, value, updated_ms) VALUES (?,?,?) "
             "ON CONFLICT(name) DO UPDATE SET value=excluded.value, updated_ms=excluded.updated_ms",
-            (OFFSET_CURSOR, int(value), self.clock_ms()),
+            (self.offset_cursor, int(value), self.clock_ms()),
         )
 
     # --- storage -------------------------------------------------------------------------------------

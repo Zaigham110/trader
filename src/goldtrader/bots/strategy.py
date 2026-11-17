@@ -104,7 +104,8 @@ def build_strategy_messages(ctx: BotContext, strat: StrategyConfig) -> list[dict
         f"{bullet_list(ctx.recent_trades[:RECENT_TRADES], max_items=RECENT_TRADES)}\n\n"
         f"Latest {LATEST_LESSONS} lessons:\n"
         f"{bullet_list(ctx.lessons[:LATEST_LESSONS], max_items=LATEST_LESSONS)}\n\n"
-        f"Calibration: {ctx.calibration_line or 'no calibration data yet'}\n\n"
+        f"Calibration: {ctx.calibration_line or 'no calibration data yet'}\n"
+        f"Positioning: {ctx.positioning_line or 'no positioning data'}\n\n"
         "Return the StrategyProposal JSON."
     )
     return [{"role": "user", "content": text}]

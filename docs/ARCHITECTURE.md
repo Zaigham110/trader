@@ -175,6 +175,13 @@ loop can write to the risk section of config.
 - Credentials never in config or logs (R-053); a test greps logs from a full test run for secrets.
 - Brain has no MT5 credentials and no import path to execution (static test).
 - Gateway HTTP API binds 127.0.0.1 only, requires a token, validates every intent against a schema.
+- The dashboard (`goldtrader.dashboard`, D-056, D-057) is a third process: loopback only, database
+  opened read-only, foreign `Host` headers refused, no secrets or config in its responses, and no
+  import of MT5, execution, gateway or risk code (enforced by `tests/test_dashboard.py`). Its single
+  write is `POST /api/chat`, which queues a question in `dashboard_chat_inbox` through a connection
+  that can do nothing else; the brain answers it and refuses every action asked for from there.
+  `POST /api/timemachine` starts `goldctl timemachine` as a separate process with whitelisted
+  parameters (D-058); that process only reads bars and writes its result row.
 - Telegram: owner chat ID only; every state-changing command confirms with a button; confirmation
   tokens expire after 2 minutes.
 - Untrusted text (news) is wrapped in delimiters and stripped of markup before any prompt (R-024).

@@ -9,10 +9,11 @@ after escaping, split into ≤ 4,000-character chunks (Telegram's limit is 4,096
 from __future__ import annotations
 
 import html
+import http.client
 import json
-import urllib.error
-import urllib.parse
-import urllib.request
+import socket
+import ssl
+import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Protocol
@@ -22,6 +23,9 @@ from goldtrader.notify.redact import MASK, Redactor
 MAX_MESSAGE_CHARS = 4000
 MAX_CALLBACK_BYTES = 64
 API_BASE = "https://api.telegram.org"
+API_HOST = "api.telegram.org"
+CONNECT_TIMEOUT_S = 3.0
+CONNECT_ROUNDS = 2
 
 #: ``transport(method, payload) -> parsed JSON response``. Raises :class:`TelegramError`.
 Transport = Callable[[str, dict[str, Any]], dict[str, Any]]
@@ -125,6 +129,76 @@ class TelegramSender(Protocol):
         ...
 
 
+# --- connection --------------------------------------------------------------------------------
+# Some networks reset the TLS handshake to api.telegram.org on one address family and let the
+# other through (seen on the owner's line: IPv4 0 of 8, IPv6 5 of 8). The default client tries one
+# address and gives up. Here every resolved address is tried, the family that worked last goes
+# first, and the list is walked twice, all inside the caller's time limit.
+_last_good_family: dict[str, int] = {}
+
+
+def _resolve(host: str, port: int = 443) -> list[tuple[int, tuple]]:
+    infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    seen: set[tuple] = set()
+    out: list[tuple[int, tuple]] = []
+    for family, _type, _proto, _canon, addr in infos:
+        if addr not in seen:
+            seen.add(addr)
+            out.append((family, addr))
+    return out
+
+
+def order_addresses(
+    addrs: list[tuple[int, tuple]], preferred: int | None
+) -> list[tuple[int, tuple]]:
+    """Preferred family first (the one that worked last, else IPv6), keeping resolver order."""
+    first = preferred if preferred is not None else socket.AF_INET6
+    return sorted(addrs, key=lambda a: 0 if a[0] == first else 1)
+
+
+def _open_tls(host: str, deadline: float) -> ssl.SSLSocket:
+    ctx = ssl.create_default_context()
+    last: Exception = OSError("no address for " + host)
+    addrs = order_addresses(_resolve(host), _last_good_family.get(host))
+    for _round in range(CONNECT_ROUNDS):
+        for family, addr in addrs:
+            left = deadline - time.monotonic()
+            if left <= 0.2:
+                raise TimeoutError(f"no connection within the time limit (last: {last!r})")
+            sock = socket.socket(family, socket.SOCK_STREAM)
+            try:
+                sock.settimeout(min(CONNECT_TIMEOUT_S, left))
+                sock.connect(addr)
+                tls = ctx.wrap_socket(sock, server_hostname=host)  # the handshake happens here
+            except (OSError, ssl.SSLError) as e:
+                last = e
+                sock.close()
+                continue
+            _last_good_family[host] = family
+            return tls
+    raise last
+
+
+def _post(host: str, path: str, body: bytes, timeout_s: float) -> tuple[int, str]:
+    """One HTTPS POST of a JSON body. Returns (status, response text)."""
+    deadline = time.monotonic() + timeout_s
+    tls = _open_tls(host, deadline)
+    conn = http.client.HTTPSConnection(host, timeout=max(1.0, deadline - time.monotonic()))
+    conn.sock = tls
+    try:
+        tls.settimeout(max(1.0, deadline - time.monotonic()))
+        conn.request(
+            "POST",
+            path,
+            body=body,
+            headers={"Content-Type": "application/json", "Connection": "close"},
+        )
+        resp = conn.getresponse()
+        return resp.status, resp.read().decode("utf-8", "replace")
+    finally:
+        conn.close()
+
+
 def urllib_transport(token: str, timeout_s: float = 10.0) -> Transport:
     """The only function that talks to the network. Errors come back as :class:`TelegramError`.
 
@@ -133,31 +207,22 @@ def urllib_transport(token: str, timeout_s: float = 10.0) -> Transport:
     redactor = Redactor([token])
 
     def call(method: str, payload: dict[str, Any]) -> dict[str, Any]:
-        url = f"{API_BASE}/bot{token}/{method}"
+        path = f"/bot{token}/{method}"
         body = json.dumps(payload).encode("utf-8")
-        req = urllib.request.Request(
-            url, data=body, headers={"Content-Type": "application/json"}, method="POST"
-        )
         try:
-            with urllib.request.urlopen(req, timeout=timeout_s) as resp:  # noqa: S310
-                raw = resp.read().decode("utf-8")
-        except urllib.error.HTTPError as e:
-            raw_err = ""
-            try:
-                raw_err = e.read().decode("utf-8", "replace")
-            except Exception:  # noqa: BLE001 - best effort body read
-                pass
-            desc, retry = _parse_error_body(raw_err)
-            raise TelegramError(
-                redactor.redact(f"telegram {method} failed: HTTP {e.code} {desc or ''}".strip()),
-                status=e.code,
-                retry_after_s=retry,
-                description=redactor.redact(desc) if desc else None,
-            ) from None
-        except (urllib.error.URLError, TimeoutError, OSError) as e:
+            status, raw = _post(API_HOST, path, body, timeout_s)
+        except (TimeoutError, OSError, http.client.HTTPException) as e:
             raise TelegramError(
                 redactor.redact(f"telegram {method} failed: {type(e).__name__}: {e}")
             ) from None
+        if status >= 400:
+            desc, retry = _parse_error_body(raw)
+            raise TelegramError(
+                redactor.redact(f"telegram {method} failed: HTTP {status} {desc or ''}".strip()),
+                status=status,
+                retry_after_s=retry,
+                description=redactor.redact(desc) if desc else None,
+            )
         try:
             data = json.loads(raw)
         except json.JSONDecodeError:

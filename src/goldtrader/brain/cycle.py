@@ -25,6 +25,7 @@ import json
 import logging
 import sqlite3
 import uuid
+import zlib
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol
@@ -94,6 +95,7 @@ class DecisionCycle:
         calibration_fn: Callable[[], str] | None = None,
         event_fn: Callable[[], tuple[str, float] | None] | None = None,
         router: Callable[[str], tuple[str, StrategyConfig]] | None = None,
+        positioning_fn: Callable[[], str] | None = None,
     ) -> None:
         self.cfg = cfg
         self.strat = strat
@@ -112,12 +114,15 @@ class DecisionCycle:
         self.signal_only_fallback = signal_only_fallback
         self.calibration_fn = calibration_fn
         self.event_fn = event_fn
+        self.positioning_fn = positioning_fn
 
     # --- the cycle ---------------------------------------------------------------------------
     def run_once(self) -> CycleResult:
         """One decision cycle. Never raises: failures are journaled and returned as `error`."""
         started = self.clock_ms()
         res = CycleResult(status="error", cycle_id=uuid.uuid4().hex[:16])
+        self._live = (res.cycle_id, started)
+        self._progress(res)  # visible to the dashboard while the cycle is still running
         try:
             self._run(res)
         except Exception as e:  # noqa: BLE001 - the cycle must never take the scheduler down
@@ -152,6 +157,7 @@ class DecisionCycle:
 
         ctx = self._context(state)
         self._step(res, "context", signal_side=ctx.signal_side, news_events=len(ctx.news_events))
+        self._snapshot(res, ctx, state)
 
         # Risk-advisor (LLM, can only lower) → hard rules (code) → budget
         budget = self._risk_budget(ctx, res)
@@ -238,6 +244,7 @@ class DecisionCycle:
             news_events=list(self.news_fn()),
             open_position=dict(positions[0]) if positions else None,
             calibration_line=self.calibration_fn() if self.calibration_fn else "",
+            positioning_line=self.positioning_fn() if self.positioning_fn else "",
             next_event=event[0] if event else None,
             minutes_to_event=event[1] if event else None,
         )
@@ -307,6 +314,52 @@ class DecisionCycle:
     # --- journal -------------------------------------------------------------------------------
     def _step(self, res: CycleResult, name: str, **data: Any) -> None:
         res.steps.append({"step": name, "at_ms": self.clock_ms(), **data})
+        self._progress(res)
+
+    def _snapshot(self, res: CycleResult, ctx: BotContext, state: GatewayState) -> None:
+        """Keep what this decision knew (D-060): every bot input except the config, compressed.
+        It makes any past decision inspectable and lets the veto report ask what code alone
+        would have done. A failed write never affects the cycle."""
+        try:
+            f = ctx.features
+            self.c.execute(
+                "INSERT OR REPLACE INTO decision_snapshots(cycle_id, at_ms, signal_side, bid, ask, "
+                "atr, inputs_z) VALUES (?,?,?,?,?,?,?)",
+                (
+                    res.cycle_id,
+                    ctx.now_ms,
+                    int(ctx.signal_side),
+                    state.bid,
+                    state.ask,
+                    getattr(f, "atr", None) if f is not None else None,
+                    zlib.compress(_stable(ctx.snapshot()).encode("utf-8")),
+                ),
+            )
+        except Exception:  # noqa: BLE001
+            log.debug("decision snapshot write failed", exc_info=True)
+
+    def _progress(self, res: CycleResult) -> None:
+        """Write the unfinished cycle (status `running`) so a viewer sees each step as it happens.
+        `_journal` replaces the row at the end. A failed write here never affects the cycle."""
+        live = getattr(self, "_live", None)
+        if live is None or live[0] != res.cycle_id:
+            return
+        try:
+            self.c.execute(
+                "INSERT OR REPLACE INTO brain_cycles(cycle_id, started_ms, finished_ms, status, "
+                "proposal_id, gate_reason, risk_budget, steps_json) VALUES (?,?,NULL,'running',"
+                "?,?,?,?)",
+                (
+                    res.cycle_id,
+                    live[1],
+                    res.proposal_id,
+                    res.gate_reason,
+                    res.risk_budget,
+                    _stable(res.steps),
+                ),
+            )
+        except Exception:  # noqa: BLE001
+            log.debug("cycle progress write failed", exc_info=True)
 
     def _journal(self, res: CycleResult, started: int) -> None:
         self.c.execute(

@@ -110,6 +110,9 @@ class AgentRun:
     finalized: Any = None
 
 
+NO_INPUT_RECORD = frozenset({"chat"})  # the conversation is already in chat_messages
+
+
 def run_agent(
     spec: AgentSpec,
     ctx: Any,
@@ -235,11 +238,29 @@ class _Runner:
             why = self.budget.refusal(self.store, now)
             if why is not None:
                 return self._finish("budget", None, why)
+        # Start marker (status `running`, no finish time) so a viewer sees the agent at work;
+        # `_finish` replaces this row with the result.
+        self.store.record_run(
+            run_id=self.run_id,
+            agent=self.spec.name,
+            started_ms=now,
+            finished_ms=None,
+            status="running",
+            turns=0,
+            cost_usd=0.0,
+            degraded=False,
+            failure_reason=None,
+        )
 
         try:
             messages = list(self.spec.build_messages(self.ctx))
         except Exception as e:  # a bot's own bug must not escape as an unhandled error
             return self._fail("error", f"build_messages failed: {e!r}")
+        if self.spec.name not in NO_INPUT_RECORD:
+            try:  # what the model was shown, kept for audit (D-060); never fatal
+                self.store.record_input(self.run_id, self.spec.name, now, messages)
+            except Exception:  # noqa: BLE001
+                pass
 
         invalid_resubmits = 0
         while True:

@@ -30,7 +30,9 @@ N3. No multi-day or weekend positions in the first release (D-020).
 N4. No local LLM deployment in the first release (D-019); the provider interface keeps it possible.
 N5. No reinforcement learning for signal generation (RESEARCH.md §5.4).
 N6. No instruments other than XAUUSD in the first release; the config supports more symbols later.
-N7. No web dashboard in the first release (D-021); Telegram is the only interface.
+N7. No web control panel in the first release (D-021): Telegram and `goldctl` are the only ways to
+    command the system. A local dashboard exists for viewing and for asking the assistant
+    questions; it cannot command anything (D-056, D-057).
 N8. The AI never holds broker credentials, never places orders, never edits risk limits, permissions
     or its own safety rules.
 

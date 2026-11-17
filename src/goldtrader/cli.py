@@ -449,7 +449,14 @@ def brain(
             from goldtrader.chat.telegram_loop import HttpTelegramUpdates
 
             sender = HttpTelegramSender(tg_token)
-            chat_updates = HttpTelegramUpdates(tg_token)  # without it the bot never reads messages
+            # Without it the bot never reads messages. The brain polls with timeout 0 inside its
+            # single-threaded loop, so the request timeout is short: a dead network path must
+            # not hold up heartbeats, the decision cycle and the dashboard chat.
+            from goldtrader.notify.telegram import urllib_transport
+
+            chat_updates = HttpTelegramUpdates(
+                tg_token, transport=urllib_transport(tg_token, timeout_s=5.0)
+            )
         svc = BrainService(
             cfg,
             repo,
@@ -533,6 +540,326 @@ def status(
     ).fetchone()
     lines.append(f"trades today: {row[0]}  net P&L today: {row[1]:+.2f} USD (net of all costs)")
     typer.echo("\n".join(lines))
+
+
+@app.command("timemachine")
+def timemachine(
+    config: Path = typer.Option(Path("config/demo.yaml")),
+    db: Path = typer.Option(Path("state/demo.sqlite")),
+    days: int = typer.Option(60, help="Last N days of stored bars; 0 = everything stored"),
+    strategy_id: str | None = None,
+    timing: str = typer.Option("every_bar", help="every_bar | live_5min"),
+    spread_mult: float = 1.0,
+    equity: float = 5000.0,
+) -> None:
+    """Replay stored gold history through the strategy, risk rules and costs (code only, no AI
+    agents) and store the result for the dashboard's Time machine."""
+    import time as _time
+
+    from goldtrader.backtest import timemachine as tm
+
+    cfg = _load(config)
+    conn = connect(db)
+    migrate(conn)
+    spec = Repo(conn).latest_spec(cfg.account.symbol) or _default_spec(cfg.account.symbol)
+    params = {
+        "days": days,
+        "strategy_id": strategy_id,
+        "timing": timing,
+        "spread_mult": spread_mult,
+        "equity": equity,
+    }
+    run_id = tm.start_run(conn, params, int(_time.time() * 1000))
+    try:
+        res = tm.run(
+            conn,
+            cfg,
+            spec,
+            days=days,
+            strategy_id=strategy_id,
+            timing=timing,
+            spread_mult=spread_mult,
+            equity=equity,
+        )
+    except Exception as e:  # noqa: BLE001 - the row must not stay "running"
+        tm.finish_run(
+            conn, run_id, int(_time.time() * 1000), None, f"{type(e).__name__}: {e}"[:500]
+        )
+        typer.echo(f"time machine failed: {e}", err=True)
+        raise typer.Exit(code=1) from e
+    tm.finish_run(conn, run_id, int(_time.time() * 1000), res)
+    m, r = res["metrics"], res["range"]
+    start = datetime.fromtimestamp(r["start_s"], UTC).date()
+    end = datetime.fromtimestamp(r["end_s"], UTC).date()
+    typer.echo(
+        f"time machine run {run_id}: {res['params']['strategy_id']} {timing} {start}..{end} "
+        f"({r['bars']} bars)\n"
+        f"  signals seen {res['signals_seen']}  trades {m.get('n_trades')}  "
+        f"net {m.get('net_pnl', 0.0):+.2f} USD ({m.get('net_return_pct', 0.0):+.2f}%)  "
+        f"win rate {(m.get('hit_rate') or 0) * 100:.0f}%  "
+        f"max drawdown {m.get('max_drawdown_pct', 0.0):.2f}%  "
+        f"buy-and-hold {res['buy_and_hold_pct'] or 0:+.2f}%\n"
+        f"  gate: {'PASS' if res['gate']['passed'] else 'FAIL'}  rejected {m.get('rejected')}"
+    )
+
+
+@app.command("strategy-search")
+def strategy_search(
+    config: Path = typer.Option(Path("config/demo.yaml")),
+    db: Path = typer.Option(Path("state/demo.sqlite")),
+    ledger_db: Path = typer.Option(Path("state/research.sqlite")),
+    holdout: float = typer.Option(1 / 3, help="Share of the stored history held back"),
+    out: Path = typer.Option(Path("reports/search")),
+    store_runs: bool = typer.Option(True, help="Store finalists as Time machine runs"),
+) -> None:
+    """Search slower-bar versions of the trend strategy that survive recorded costs. Ranks on the
+    earlier part of the stored history and checks the best on the held-out later part."""
+    import time as _time
+
+    from goldtrader.backtest import search as ss
+    from goldtrader.backtest import timemachine as tm
+
+    cfg = _load(config)
+    conn = connect(db)
+    migrate(conn)
+    spec = Repo(conn).latest_spec(cfg.account.symbol) or _default_spec(cfg.account.symbol)
+    lconn = connect(ledger_db)
+    migrate(lconn)
+    ledger = Repo(lconn)
+    frame = tm.load_frame(conn, cfg)
+    snap = snapshot_id(frame)
+    chash = config_hash(cfg)
+    ledger.record_data_snapshot(
+        snap,
+        f"bars {db} (in-sample part)",
+        cfg.account.symbol,
+        60,
+        int(frame["time"].iloc[0]),
+        int(frame["time"].iloc[-1]),
+        len(frame),
+    )
+
+    def on_trial(c, m, _df) -> None:
+        kind, sid, params = c
+        bid = bundle_id(sid, kind, params, chash)
+        ledger.record_bundle(bid, sid, kind, params, chash)
+        ledger.append_trial(
+            bundle_id=bid,
+            change_type="search",
+            description=f"strategy-search in-sample: {ss.describe(c)}",
+            data_snapshot_id=snap,
+            cost_model_json=CostModel().as_dict(),
+            n_trades=m["n_trades"],
+            n_days=m["n_days"],
+            sharpe=m.get("sharpe"),
+            net_return_pct=m.get("net_return_pct"),
+            max_drawdown_pct=m.get("max_drawdown_pct"),
+            created_by="owner",
+            status="recorded",
+        )
+        typer.echo(
+            f"  {sid:<28} trades {m['n_trades'] or 0:>4}  net {m.get('net_return_pct') or 0:+6.2f}%"
+        )
+
+    typer.echo("in-sample results (earlier part of the history):")
+    res = ss.run_search(conn, cfg, spec, holdout=holdout, on_trial=on_trial, frame=frame)
+    out.mkdir(parents=True, exist_ok=True)
+    path = out / f"search_{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}.json"
+    path.write_text(json.dumps(res, indent=2), encoding="utf-8")
+
+    def line(tag: str, m: dict) -> str:
+        pf = m.get("profit_factor")
+        return (
+            f"    {tag:<22} trades {m['n_trades'] or 0:>4}  net {m.get('net_return_pct') or 0:+6.2f}%"
+            f"  win {(m.get('hit_rate') or 0) * 100:3.0f}%  PF {pf if pf is None else round(pf, 2)}"
+            f"  max DD {m.get('max_drawdown_pct') or 0:.2f}%"
+        )
+
+    r = res["range"]
+    d = lambda s: datetime.fromtimestamp(s, UTC).date()  # noqa: E731
+    typer.echo(
+        f"\n{res['n_tried']} candidates tried; {res['n_profitable_in_sample']} profitable in-sample "
+        f"({d(r['start_s'])}..{d(r['split_s'])}); held-out period {d(r['split_s'])}..{d(r['end_s'])}"
+    )
+    for row in [res["baseline"], *res["finalists"]]:
+        typer.echo(f"\n  {row['what']}  ->  {'HOLDS' if row['holds'] else 'does not hold'}")
+        typer.echo(line("in-sample", row["in_sample"]))
+        typer.echo(line("held out", row["held_out"]))
+        typer.echo(line("held out, spread x1.5", row["held_out_stress"]))
+    if not res["finalists"]:
+        typer.echo("\n  no candidate was profitable in-sample with enough trades")
+    if store_runs:
+        for row in res["finalists"][:3]:
+            c = tuple(row["candidate"])
+            params = {"days": 0, "strategy_id": c[1], "timing": "every_bar", "spread_mult": 1.0}
+            rid = tm.start_run(conn, params, int(_time.time() * 1000))
+            full = tm.run(conn, cfg, spec, days=0, candidate=c, frame=frame, label=row["what"])
+            tm.finish_run(conn, rid, int(_time.time() * 1000), full)
+            typer.echo(f"  stored as Time machine run {rid}: {row['what']}")
+    typer.echo(f"\nreport: {path}")
+
+
+@app.command("paper-add")
+def paper_add(
+    bundle_id: str = typer.Argument(..., help="Short name, e.g. paper_htf60"),
+    kind: str = typer.Option("trend_htf"),
+    params: str = typer.Option(..., help="k=v;k=v, e.g. minutes=60;on_cross=0;stop_atr=1.5"),
+    label: str = typer.Option(""),
+    db: Path = typer.Option(Path("state/demo.sqlite")),
+) -> None:
+    """Paper-test a strategy next to the live system: simulated on live bars by the brain's shadow
+    ledger, logged to shadow_trades, never sent to the broker (D-059)."""
+    import re
+    import time as _time
+
+    if not re.fullmatch(r"[A-Za-z0-9_\-]{3,40}", bundle_id):
+        typer.echo("bundle id: 3-40 letters, digits, _ or -", err=True)
+        raise typer.Exit(code=1)
+    try:
+        p = {k.strip(): float(v) for k, v in (kv.split("=", 1) for kv in params.split(";") if kv)}
+        build_strategy(kind, bundle_id, p)  # refuses unknown kinds and bad values now, not later
+    except Exception as e:  # noqa: BLE001
+        typer.echo(f"bad strategy: {e}", err=True)
+        raise typer.Exit(code=1) from e
+    conn = connect(db)
+    migrate(conn)
+    conn.execute(
+        "INSERT INTO paper_candidates(bundle_id, kind, params_json, label, created_ms, active) "
+        "VALUES (?,?,?,?,?,1) ON CONFLICT(bundle_id) DO UPDATE SET active=1",
+        (
+            bundle_id,
+            kind,
+            json.dumps(p, sort_keys=True),
+            label or bundle_id,
+            int(_time.time() * 1000),
+        ),
+    )
+    typer.echo(f"paper candidate {bundle_id} is active; the brain picks it up within a minute")
+
+
+@app.command("paper-remove")
+def paper_remove(
+    bundle_id: str = typer.Argument(...),
+    db: Path = typer.Option(Path("state/demo.sqlite")),
+) -> None:
+    """Stop paper-testing a candidate (its recorded trades are kept)."""
+    conn = connect(db)
+    migrate(conn)
+    n = conn.execute(
+        "UPDATE paper_candidates SET active=0 WHERE bundle_id=?", (bundle_id,)
+    ).rowcount
+    typer.echo(f"{bundle_id}: {'stopped' if n else 'not found'}")
+
+
+@app.command("paper-list")
+def paper_list(db: Path = typer.Option(Path("state/demo.sqlite"))) -> None:
+    """Paper candidates with their simulated results so far."""
+    conn = connect(db)
+    migrate(conn)
+    rows = conn.execute(
+        "SELECT c.bundle_id, c.label, c.active, c.created_ms, "
+        "SUM(CASE WHEN t.status='closed' THEN 1 ELSE 0 END) AS n, "
+        "COALESCE(SUM(t.net_pnl),0) AS net, AVG(t.r_multiple) AS mean_r, "
+        "SUM(CASE WHEN t.status='open' THEN 1 ELSE 0 END) AS open_n "
+        "FROM paper_candidates c LEFT JOIN shadow_trades t ON t.bundle_id=c.bundle_id "
+        "GROUP BY c.bundle_id ORDER BY c.created_ms"
+    ).fetchall()
+    if not rows:
+        typer.echo("no paper candidates")
+    for r in rows:
+        since = datetime.fromtimestamp(r["created_ms"] / 1000, UTC).strftime("%Y-%m-%d %H:%M")
+        mean_r = "n/a" if r["mean_r"] is None else f"{r['mean_r']:+.2f}"
+        typer.echo(
+            f"{r['bundle_id']} [{'active' if r['active'] else 'stopped'}] since {since} UTC: "
+            f"{r['n'] or 0} closed, net {r['net']:+.2f} USD at 0.01 lot, mean R {mean_r}, "
+            f"{r['open_n'] or 0} open  - {r['label']}"
+        )
+
+
+@app.command("veto-report")
+def veto_report(
+    config: Path = typer.Option(Path("config/demo.yaml")),
+    db: Path = typer.Option(Path("state/demo.sqlite")),
+) -> None:
+    """Do the AI agents' vetoes add value? Signals the code wanted, what happened to them, and
+    what each would have made as a code-only trade (in R)."""
+    import time as _time
+
+    from goldtrader.report import veto
+
+    cfg = _load(config)
+    conn = connect(db)
+    migrate(conn)
+    strat = ([s for s in cfg.strategies if s.enabled] or list(cfg.strategies))[0]
+    rep = veto.build(conn, cfg, strat, int(_time.time() * 1000))
+    typer.echo(
+        f"{rep['decisions_recorded']} decisions recorded; {rep['signals']} had a signal "
+        f"(code-only trade: stop {rep['stop_atr']} ATR, target {rep['target_atr']} ATR)"
+    )
+    names = {"taken": "taken", "ai_veto": "vetoed by AI", "code_block": "blocked by code"}
+    names["ai_down"] = "AI unavailable"
+    for key, label in names.items():
+        c = rep["classes"][key]
+        mean = "n/a" if c["mean_r"] is None else f"{c['mean_r']:+.2f}"
+        typer.echo(
+            f"  {label:<16} {c['n']:>4} signals, {c['resolved']:>4} played out, "
+            f"{c['wins']:>3} would have won, total {c['sum_r']:+.2f} R, mean {mean} R"
+        )
+    typer.echo(rep["verdict"])
+
+
+@app.command("dashboard")
+def dashboard(
+    config: Path = typer.Option(Path("config/demo.yaml")),
+    db: Path = typer.Option(Path("state/demo.sqlite")),
+    gateway_url: str = "http://127.0.0.1:8750",
+    port: int = 8760,
+    minutes: float | None = None,
+) -> None:
+    """Serve the read-only dashboard on this PC only (D-056): market, account, agents."""
+    import threading
+
+    from goldtrader.dashboard.server import DashboardServer
+    from goldtrader.gateway.api import GatewayClient
+    from goldtrader.process.exitlog import ExitLog
+    from goldtrader.process.lock import acquire
+    from goldtrader.secrets import get_secret
+
+    cfg = _load(config)
+    state_dir = Path(cfg.data.db_dir)
+    if not db.exists():
+        typer.echo(f"database {db} not found; start the gateway first", err=True)
+        raise typer.Exit(code=2)
+    ExitLog(state_dir / "dashboard.exit.log").install("dashboard")
+    with acquire("dashboard", state_dir):
+        token = get_secret("GATEWAY_TOKEN", required=False)
+        if token is None and (state_dir / "gateway.token").exists():
+            token = (state_dir / "gateway.token").read_text().strip()
+        # a short timeout: the page must still load from the database when the gateway is down
+        gateway = GatewayClient(gateway_url, token, timeout_s=1.5) if token else None
+        srv = DashboardServer(
+            db,
+            gateway,
+            symbol=cfg.account.symbol,
+            port=port,
+            config_path=config,
+            strategies=tuple(st.id for st in cfg.strategies),
+        )
+        srv.start()
+        typer.echo(
+            f"dashboard up: http://127.0.0.1:{srv.port}  (read-only; "
+            f"gateway={'on' if gateway else 'no token, database only'})"
+        )
+        stop = threading.Event()
+        if minutes:
+            threading.Timer(minutes * 60, stop.set).start()
+        try:
+            while not stop.wait(1.0):
+                pass
+        except KeyboardInterrupt:
+            pass
+        finally:
+            srv.stop()
 
 
 @app.command("llm-check")
