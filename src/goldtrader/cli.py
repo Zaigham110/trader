@@ -444,8 +444,12 @@ def brain(
         sender = None
         chat_id = get_secret("TELEGRAM_OWNER_CHAT_ID", required=False)
         tg_token = get_secret("TELEGRAM_BOT_TOKEN", required=False)
+        chat_updates = None
         if chat_id and tg_token:
+            from goldtrader.chat.telegram_loop import HttpTelegramUpdates
+
             sender = HttpTelegramSender(tg_token)
+            chat_updates = HttpTelegramUpdates(tg_token)  # without it the bot never reads messages
         svc = BrainService(
             cfg,
             repo,
@@ -453,10 +457,12 @@ def brain(
             model,  # type: ignore[arg-type]
             sender=sender,
             owner_chat_id=int(chat_id) if chat_id else None,
+            chat_updates=chat_updates,
+            config_path=config,
         )
         typer.echo(
             f"brain up: strategy={svc.strat.id} gateway={gateway_url} alerts="
-            f"{'telegram' if sender else 'off'}"
+            f"{'telegram' if sender else 'off'} chat={'on' if svc.chat else 'off'}"
         )
         stop = threading.Event()
         if minutes:

@@ -21,6 +21,7 @@ from goldtrader.llm.anthropic_provider import (
     build_create_kwargs,
     map_exception,
     strict_schema,
+    wire_schema,
 )
 from goldtrader.llm.provider import (
     ModelRequest,
@@ -228,11 +229,77 @@ def test_strict_schema_handles_arrays_of_objects():
     assert s["items"]["additionalProperties"] is False and s["items"]["required"] == ["a"]
 
 
+def test_wire_schema_drops_constraints_the_api_rejects():
+    src = {
+        "type": "object",
+        "properties": {
+            "budget": {"type": "integer", "minimum": 0, "maximum": 100},
+            "reasons": {
+                "type": "array",
+                "maxItems": 3,
+                "minItems": 1,
+                "items": {"type": "string", "maxLength": 120, "description": "why"},
+            },
+            "side": {"type": ["string", "null"], "enum": ["long", "short", None]},
+        },
+        "required": ["budget"],
+        "additionalProperties": False,
+    }
+    before = repr(src)
+    w = wire_schema(src)
+    assert repr(src) == before  # the caller's schema (used for local validation) is untouched
+    assert w["properties"]["budget"] == {
+        "type": "integer",
+        "description": "(minimum 0, maximum 100)",
+    }
+    reasons = w["properties"]["reasons"]
+    assert "maxItems" not in reasons and reasons["minItems"] == 1
+    assert reasons["items"] == {"type": "string", "description": "why (maxLength 120)"}
+    assert w["properties"]["side"] == {
+        "anyOf": [{"type": "string", "enum": ["long", "short"]}, {"type": "null"}]
+    }
+    assert w["required"] == ["budget"] and w["additionalProperties"] is False
+
+
+def test_payload_sends_the_wire_schema_for_every_bot_output():
+    from goldtrader.bots.risk_advisor import RiskAdvice
+    from goldtrader.bots.strategy import StrategyProposal
+    from goldtrader.llm.schema import pydantic_to_schema
+
+    banned = {
+        "minimum",
+        "maximum",
+        "exclusiveMinimum",
+        "exclusiveMaximum",
+        "minLength",
+        "maxLength",
+    }
+
+    def keys(node: Any) -> set[str]:
+        if isinstance(node, dict):
+            # property names are data, not keywords: only descend into their values
+            found = {k for k in node if k != "properties"}
+            for k, v in node.items():
+                found |= (
+                    set().union(*(keys(x) for x in v.values())) if k == "properties" else keys(v)
+                )
+            return found
+        if isinstance(node, list):
+            return set().union(*(keys(x) for x in node)) if node else set()
+        return set()
+
+    for model in (RiskAdvice, StrategyProposal):
+        kw = build_create_kwargs(
+            _request(output_schema=pydantic_to_schema(model)), CFG.tiers["standard"]
+        )
+        assert not (keys(kw["output_config"]["format"]["schema"]) & banned)
+
+
 def test_payload_output_config_effort_and_format():
     kw = build_create_kwargs(_request(effort="low"), CFG.tiers["standard"])
     assert kw["output_config"] == {
         "effort": "medium",  # tier default wins over a lower request effort
-        "format": {"type": "json_schema", "schema": SCHEMA},
+        "format": {"type": "json_schema", "schema": wire_schema(SCHEMA)},
     }
     kw = build_create_kwargs(_request(tier="fast", effort="high"), CFG.tiers["fast"])
     assert kw["output_config"]["effort"] == "high"  # a request may ask for more depth
@@ -634,7 +701,7 @@ def test_payload_is_accepted_and_serialized_by_the_real_sdk():
     assert plain["system"][0]["cache_control"] == {"type": "ephemeral"}
     assert plain["output_config"] == {
         "effort": "medium",
-        "format": {"type": "json_schema", "schema": SCHEMA},
+        "format": {"type": "json_schema", "schema": wire_schema(SCHEMA)},
     }
     for key in ("thinking", "temperature", "top_p", "top_k", "tool_choice"):
         assert key not in plain

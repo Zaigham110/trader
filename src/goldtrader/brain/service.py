@@ -236,7 +236,7 @@ class BrainService:
 
     def _shadow_job(self) -> None:
         """Feed each newly closed 1-minute bar to the shadow ledger with the session state."""
-        if not self.learning.shadow.bundles():
+        if not self.learning.shadow.bundles:  # a property (list of ids), not a method
             return
         df = self.feats._frame()
         if df is None or df.empty:

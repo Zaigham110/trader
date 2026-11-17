@@ -127,6 +127,55 @@ def validate_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return messages
 
 
+_WIRE_DROPPED = (
+    "minimum",
+    "maximum",
+    "exclusiveMinimum",
+    "exclusiveMaximum",
+    "multipleOf",
+    "minLength",
+    "maxLength",
+    "maxItems",
+)
+"""Keywords the API's structured outputs reject with a 400 (observed 2026-11-17: "For 'integer'
+type, properties maximum, minimum are not supported"). `validate()` still enforces them locally."""
+
+
+def wire_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    """Copy of a schema with the constraints structured outputs do not accept removed.
+
+    Each removed constraint is restated in the node's `description` so the model still sees it; the
+    full schema keeps being enforced in code after the response arrives (`_map_response`, runtime).
+    `minItems` survives only as 0 or 1, the values the API supports.
+    """
+    out = dict(schema)
+    notes = [f"{k} {out.pop(k)}" for k in _WIRE_DROPPED if k in out]
+    if "minItems" in out and out["minItems"] not in (0, 1):
+        notes.append(f"minItems {out.pop('minItems')}")
+    if notes:
+        desc = str(out.get("description") or "").strip()
+        out["description"] = f"{desc} ({', '.join(notes)})".strip()
+    props = out.get("properties")
+    if isinstance(props, dict):
+        out["properties"] = {
+            k: wire_schema(v) if isinstance(v, dict) else v for k, v in props.items()
+        }
+    if isinstance(out.get("items"), dict):
+        out["items"] = wire_schema(out["items"])
+    # A nullable enum (`{"type": ["string", "null"], "enum": [..., None]}`) is rejected ("Enum
+    # value 'long' does not match declared type"); the accepted spelling is an anyOf with null.
+    t = out.get("type")
+    if isinstance(t, list) and "null" in t and isinstance(out.get("enum"), list):
+        rest = [x for x in t if x != "null"]
+        branch: dict[str, Any] = {
+            "type": rest[0] if len(rest) == 1 else rest,
+            "enum": [v for v in out.pop("enum") if v is not None],
+        }
+        del out["type"]
+        out["anyOf"] = [branch, {"type": "null"}]
+    return out
+
+
 def strict_schema(schema: dict[str, Any]) -> dict[str, Any]:
     """Copy of a tool input schema that satisfies `strict: true`.
 
@@ -159,7 +208,7 @@ def tool_param(spec: ToolSpec) -> dict[str, Any]:
         "name": spec.name,
         "description": spec.description,
         "strict": True,
-        "input_schema": strict_schema(spec.input_schema),
+        "input_schema": strict_schema(wire_schema(spec.input_schema)),
     }
 
 
@@ -192,7 +241,10 @@ def build_create_kwargs(request: ModelRequest, tier_cfg: LLMTier) -> dict[str, A
         kwargs["tools"] = tools
     output_config: dict[str, Any] = {"effort": resolve_effort(request.effort, tier_cfg.effort)}
     if request.output_schema:
-        output_config["format"] = {"type": "json_schema", "schema": request.output_schema}
+        output_config["format"] = {
+            "type": "json_schema",
+            "schema": wire_schema(request.output_schema),
+        }
     kwargs["output_config"] = output_config
     return kwargs
 

@@ -136,6 +136,10 @@ def test_brain_fails_flat_without_provider_and_when_gateway_down(tmp_path):
         brain.tick()
         assert brain.last_cycle is not None and brain.last_cycle.intent_result is None
         assert client.positions_get() == []
+        # the scheduler swallows job errors, so call the shadow job and the status directly:
+        # `ShadowLedger.bundles` is a property and both used to call it (TypeError on the demo PC)
+        brain._shadow_job()
+        assert brain.learning.status()["shadow_bundles"] == []
         gw.stop()
         clock.advance(61)
         ran = brain.tick()  # gateway unreachable → only_when False → cycle skipped, no exception

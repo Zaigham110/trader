@@ -172,6 +172,6 @@ class LearningJob:
                 }
                 for e in active
             ],
-            "shadow_bundles": self.shadow.bundles(),
+            "shadow_bundles": self.shadow.bundles,
             "last_summary": self.last_summary,
         }
