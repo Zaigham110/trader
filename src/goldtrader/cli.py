@@ -541,13 +541,69 @@ def llm_check(config: Path = typer.Option(Path("config/demo.yaml"))) -> None:
             text = getattr(resp, "text", None)
             if text:
                 typer.echo(f"  response: {redact(str(text))[:600]}", err=True)
-            typer.echo(
-                "  if the message says the credit balance is too low: link the Max plan's API "
-                "credit to this Console organization (docs/WINDOWS_SETUP.md step 9) or check "
-                "platform.claude.com/settings/billing",
-                err=True,
-            )
+            _llm_diagnose(getattr(getattr(p, "_client", None), "base_url", None))
             raise typer.Exit(code=1) from e
+
+
+def _llm_diagnose(base_url: object) -> None:
+    """Print what the failing request was made of, without ever printing the key itself."""
+    from goldtrader.llm.anthropic_provider import redact
+    from goldtrader.secrets import get_secret
+
+    typer.echo("  -- diagnostics --", err=True)
+    typer.echo(f"  base_url: {base_url}", err=True)
+    for var in (
+        "ANTHROPIC_BASE_URL",
+        "ANTHROPIC_AUTH_TOKEN",
+        "HTTPS_PROXY",
+        "HTTP_PROXY",
+        "ALL_PROXY",
+        "NO_PROXY",
+        "SSL_CERT_FILE",
+        "REQUESTS_CA_BUNDLE",
+    ):
+        if os.environ.get(var) or os.environ.get(var.lower()):
+            typer.echo(f"  env {var} is set (affects the request)", err=True)
+    key = get_secret("ANTHROPIC_API_KEY", required=False) or ""
+    kind = (
+        "console api key"
+        if key.startswith("sk-ant-api")
+        else (
+            "Claude.ai/Claude Code OAuth token (not accepted by the API)"
+            if key.startswith("sk-ant-oat")
+            else "unknown shape"
+        )
+    )
+    flags = []
+    if key != key.strip():
+        flags.append("has leading/trailing whitespace or newline")
+    if any(ord(c) > 126 or ord(c) < 32 for c in key):
+        flags.append("contains non-ASCII or control characters (paste artefact)")
+    if key[:1] in "'\"" or key[-1:] in "'\"":
+        flags.append("wrapped in quotes")
+    typer.echo(f"  key: {kind}; length {len(key)}; {', '.join(flags) or 'clean'}", err=True)
+    try:
+        import httpx
+
+        url = f"{str(base_url).rstrip('/')}/v1/models?limit=1"
+        r = httpx.get(
+            url, headers={"x-api-key": key.strip(), "anthropic-version": "2023-06-01"}, timeout=20
+        )
+        hdrs = {
+            k: r.headers.get(k)
+            for k in ("request-id", "cf-ray", "server", "content-type", "via")
+            if r.headers.get(k)
+        }
+        typer.echo(f"  raw GET {url}: HTTP {r.status_code} {hdrs}", err=True)
+        typer.echo(f"  raw body: {redact(r.text[:400])!r}", err=True)
+    except Exception as ex:  # noqa: BLE001
+        typer.echo(f"  raw GET failed: {redact(str(ex))[:300]}", err=True)
+    typer.echo(
+        "  credit balance too low -> link the Max plan's API credit to the key's Console "
+        "organization (docs/WINDOWS_SETUP.md step 9); empty body / HTML -> a proxy or antivirus "
+        "is intercepting the request",
+        err=True,
+    )
 
 
 @app.command("eval")

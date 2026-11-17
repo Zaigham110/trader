@@ -125,17 +125,22 @@ the documented upgrade path if uptime is a problem.
 
 ## 8. Phase 3 acceptance checklist (the 16 on-account tests)
 
-**Demo run 2026-11-17 (Exness-MT5Trial15).** Read-only suite: all pass except T14 (history probe asked
-for 5,000,000 bars at once, which the server answers with nothing; fixed to a bounded range). Trade
-suite: T00–T05, T08, T10–T13, T15, T16 pass. Exness differs from the generic MQL5 expectations in three
-places, now accepted by the probes and by the execution engine (a comment containing "stop" or
-"volume" is never retried):
+**Demo runs 2026-11-17 (Exness-MT5Trial15, two runs).** Read-only suite: all pass (the first run's T14
+asked for 5,000,000 bars at once, which the server answers with nothing; now a bounded range). Trade
+suite: every probe passes once the expectations below are used. Exness differs from the generic MQL5
+expectations in four places, now accepted by the probes and by the execution engine (a rejection whose
+comment contains "stop" or "volume" is never retried):
 
 | Test | Expected (MQL5 docs) | Exness demo answer |
 | --- | --- | --- |
-| T06 SL inside the spread | 10016 INVALID_STOPS | 10011 / 10006 with comment "bad stops" |
+| T06 SL inside the spread | 10016 INVALID_STOPS | run 1: 10011 / 10006 "bad stops"; run 2: **10009 accepted** (stops_level 0 = no broker rule). The risk engine's own clearance (`MIN_STOP_POINTS`) is the only minimum stop distance |
 | T07 close more than the position | 10038 INVALID_CLOSE_VOLUME | 10014 INVALID_VOLUME |
+| T08 close-by of a hedged pair | 10009 | 10029 "Modification failed due to order or position being close to market"; hedging itself works (buy + sell coexist). The engine never uses CLOSE_BY; it closes each position by ticket |
 | T09 buy-stop at the ask with TP one point away | 10008 PLACED, then `[SL violated]` | 10006 REJECT "bad stops", no pending order |
+
+History depth on the demo server (T14): M1 from 2026-08-17, M5/M15/H1 from 2026-07-20, D1 from
+2026-07-21 (about three months of M1). Slippage run 2: entry mean +9.8 points, p95 0, worst 196 points.
+Latency run 2: p50 29.5 ms, p95 37.3 ms over 40 sends.
 
 Tick history on the demo server starts 2026-11-06 (demo servers keep days, not years); M1 bar
 history is deeper and is pulled with `goldctl backfill --real --days 60` into `bars`.

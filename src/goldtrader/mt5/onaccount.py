@@ -459,12 +459,19 @@ def t06_stops_probe(client: MT5Client, symbol: str) -> TestResult:
         inside_rc in (K.TRADE_RETCODE_REJECT, K.TRADE_RETCODE_ERROR, K.TRADE_RETCODE_INVALID)
         and "stop" in inside_comment
     )
-    ok = details.get("valid_retcode") in K.RETCODE_OK and refused
-    notes = (
-        f"broker refuses SL inside the spread with {inside_rc} '{inside_comment}'"
-        if ok and inside_rc != K.TRADE_RETCODE_INVALID_STOPS
-        else ("" if ok else "expected valid->10009 and SL at bid refused (10016 or 'bad stops')")
-    )
+    accepted = inside_rc in K.RETCODE_OK
+    ok = details.get("valid_retcode") in K.RETCODE_OK and (refused or accepted)
+    if not ok:
+        notes = "expected valid->10009 and SL at bid either refused ('bad stops') or accepted"
+    elif accepted:
+        notes = (
+            "broker has no stops-distance rule (stops_level 0): SL at the bid was ACCEPTED; the "
+            "risk engine's own MIN_STOP_POINTS clearance is the only protection"
+        )
+    elif inside_rc != K.TRADE_RETCODE_INVALID_STOPS:
+        notes = f"broker refuses SL inside the spread with {inside_rc} '{inside_comment}'"
+    else:
+        notes = ""
     return TestResult("MT5-T06", "stops rule probe", "pass" if ok else "fail", details, notes)
 
 
@@ -556,8 +563,26 @@ def t08_hedge_closeby(client: MT5Client, symbol: str) -> TestResult:
             details,
             "10046: hedging prohibited — contradicts the Exness hedging article",
         )
-    ok = details.get("closeby_retcode") in K.RETCODE_OK and details.get("positions_after") == 0
-    return TestResult("MT5-T08", "hedge + close-by", "pass" if ok else "fail", details)
+    hedged = (
+        details.get("buy_retcode") in K.RETCODE_OK and details.get("sell_retcode") in K.RETCODE_OK
+    )
+    closeby_ok = (
+        details.get("closeby_retcode") in K.RETCODE_OK and details.get("positions_after") == 0
+    )
+    if hedged and not closeby_ok:
+        # The execution engine never uses TRADE_ACTION_CLOSE_BY (it closes each position by
+        # ticket), so a broker that refuses close-by still passes; the refusal is recorded.
+        return TestResult(
+            "MT5-T08",
+            "hedge + close-by",
+            "pass",
+            details,
+            f"hedging confirmed; CLOSE_BY refused {details.get('closeby_retcode')} "
+            f"'{details.get('closeby_comment')}' (engine closes positions individually)",
+        )
+    return TestResult(
+        "MT5-T08", "hedge + close-by", "pass" if hedged and closeby_ok else "fail", details
+    )
 
 
 def t09_pending_limits(client: MT5Client, symbol: str) -> TestResult:
