@@ -119,7 +119,13 @@ cd $HOME\trader
 .venv\Scripts\goldctl secret-set ANTHROPIC_API_KEY --from-clipboard
 ```
 
-   Typing short values by hand (login, chat id) works in the prompt. `goldctl doctor` prints each
+   `GATEWAY_TOKEN` is a random value nobody needs to know; let the tool make it:
+
+```powershell
+.venv\Scripts\goldctl secret-set GATEWAY_TOKEN --generate
+```
+
+   Typing short values by hand (login, chat id, server name) works in the prompt. `goldctl doctor` prints each
    secret's length and flags a wrong shape; a healthy Console API key is about 108 characters and
    starts with `sk-ant-api03`.
 

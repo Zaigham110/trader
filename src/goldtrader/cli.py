@@ -1,7 +1,7 @@
 """goldctl — owner and developer command line (ARCHITECTURE §4). Phase 3 commands only.
 
 Secrets are never passed as arguments: the real MT5 login reads MT5_LOGIN / MT5_PASSWORD /
-MT5_SERVER from the environment (Windows Credential Manager support arrives in Phase 4, R-053).
+MT5_SERVER through `goldtrader.secrets` (environment, then Windows Credential Manager; R-053).
 """
 
 from __future__ import annotations
@@ -51,13 +51,21 @@ def _client(fake: bool):
         return c
     from goldtrader.mt5.real import RealMT5
 
+    from goldtrader.secrets import get_secret
+
     c = RealMT5()
-    login = os.environ.get("MT5_LOGIN")
-    password = os.environ.get("MT5_PASSWORD")
-    server = os.environ.get("MT5_SERVER")
+    login = (get_secret("MT5_LOGIN", required=False) or "").strip()
+    password = get_secret("MT5_PASSWORD", required=False)
+    server = (get_secret("MT5_SERVER", required=False) or "").strip()
     kwargs = {}
-    if login and password and server:
+    if login.isdigit() and password and server:
         kwargs = {"login": int(login), "password": password, "server": server}
+    else:
+        typer.echo(
+            "MT5 credentials incomplete or malformed (run goldctl doctor); using the account the "
+            "terminal is already logged in to",
+            err=True,
+        )
     if not c.initialize(**kwargs):
         raise typer.Exit(code=2)
     return c
@@ -873,6 +881,9 @@ def secret_set(
     from_clipboard: bool = typer.Option(
         False, "--from-clipboard", help="read the value from the clipboard instead of prompting"
     ),
+    generate: bool = typer.Option(
+        False, "--generate", help="store a new random 64-hex-character token (for GATEWAY_TOKEN)"
+    ),
 ) -> None:
     """Store a secret in the OS credential store (prompts; the value is never echoed).
 
@@ -887,7 +898,11 @@ def secret_set(
             f"unknown secret name {name!r} (read as {cleaned!r}); choose one of {KNOWN}", err=True
         )
         raise typer.Exit(code=1)
-    if from_clipboard:
+    if generate:
+        import secrets as _secrets
+
+        value = _secrets.token_hex(32)
+    elif from_clipboard:
         value = _read_clipboard()
     else:
         value = typer.prompt(
