@@ -83,6 +83,34 @@ In Telegram send `/status` to the bot. You should get a code-generated summary w
 seconds. Then ask it something in plain language, for example "what is the risk setting for this
 account?" and confirm the answer carries a `source:` line.
 
+## 5a. Telegram signal channels (optional, D-061)
+
+Records gold signals from channels you follow and scores them on our own prices. Each fresh signal
+is sent to you as an alert through your bot and shown to the Strategy agent as context with the
+channel's measured record (D-062). It never posts, and a channel signal can never open a trade on
+its own. Start the reader with `--no-alerts` to switch the alerts off.
+
+After the login, `scripts\windows\install-tasks.ps1` also registers the task `goldtrader-signals`, so
+the reader starts at logon like the brain (add `-SignalsIpv6` where Telegram is blocked over IPv4).
+
+1. Install the library once: `uv pip install "telethon>=1.36,<2"`.
+2. At https://my.telegram.org choose "API development tools", create an app, and store the two
+   values yourself (never paste them into chat):
+   `goldctl secret-set TELEGRAM_API_ID` and `goldctl secret-set TELEGRAM_API_HASH`.
+3. `goldctl signals-login` in your own terminal: type your phone number, the code Telegram sends
+   to your app and, if you set one, your two-step password. The login is saved as
+   `state\telegram_user.session`; treat that file like a password.
+4. `goldctl signals-channels` (add `--find gold` to filter) lists your channels with their ids.
+   Watch one with `goldctl signals-add <id> --name "<name>"`; add `--gold-only` when every signal
+   there is gold even when the message does not say so.
+5. Start the reader: `goldctl signals` (add `--ipv6` if it cannot connect). Stop the reader before
+   running `signals-channels` again, because both use the same login file.
+6. Results: the "Telegram signal channels" panel on the dashboard, or `goldctl signals-report`.
+   Judge a channel only after about 30 finished signals.
+
+To revoke access at any time: Telegram app > Settings > Devices > end the "goldtrader signal
+reader" session, then delete `state\telegram_user.session`.
+
 ## 6. Daily (two minutes)
 
 - `goldctl status` or Telegram `/status`, or open the dashboard at http://127.0.0.1:8760 on the PC

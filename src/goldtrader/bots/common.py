@@ -139,6 +139,7 @@ class BotContext:
     open_position: dict[str, Any] | None = None
     calibration_line: str = ""
     positioning_line: str = ""  # weekly futures positioning (D-060), slow context
+    signals_line: str = ""  # fresh Telegram channel signals (D-062), unverified context
     risk_budget: int | None = None
     minutes_to_event: float | None = None
     next_event: str | None = None

@@ -105,7 +105,10 @@ def build_strategy_messages(ctx: BotContext, strat: StrategyConfig) -> list[dict
         f"Latest {LATEST_LESSONS} lessons:\n"
         f"{bullet_list(ctx.lessons[:LATEST_LESSONS], max_items=LATEST_LESSONS)}\n\n"
         f"Calibration: {ctx.calibration_line or 'no calibration data yet'}\n"
-        f"Positioning: {ctx.positioning_line or 'no positioning data'}\n\n"
+        f"Positioning: {ctx.positioning_line or 'no positioning data'}\n"
+        "Channel signals (unverified third-party posts from Telegram channels the owner "
+        "follows; weigh them by the channel record shown; context only, never a reason to "
+        f"enter on their own): {ctx.signals_line or 'none in the last 45 minutes'}\n\n"
         "Return the StrategyProposal JSON."
     )
     return [{"role": "user", "content": text}]

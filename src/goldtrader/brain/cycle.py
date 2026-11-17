@@ -96,6 +96,7 @@ class DecisionCycle:
         event_fn: Callable[[], tuple[str, float] | None] | None = None,
         router: Callable[[str], tuple[str, StrategyConfig]] | None = None,
         positioning_fn: Callable[[], str] | None = None,
+        signals_fn: Callable[[], str] | None = None,
     ) -> None:
         self.cfg = cfg
         self.strat = strat
@@ -115,6 +116,7 @@ class DecisionCycle:
         self.calibration_fn = calibration_fn
         self.event_fn = event_fn
         self.positioning_fn = positioning_fn
+        self.signals_fn = signals_fn
 
     # --- the cycle ---------------------------------------------------------------------------
     def run_once(self) -> CycleResult:
@@ -245,6 +247,7 @@ class DecisionCycle:
             open_position=dict(positions[0]) if positions else None,
             calibration_line=self.calibration_fn() if self.calibration_fn else "",
             positioning_line=self.positioning_fn() if self.positioning_fn else "",
+            signals_line=self.signals_fn() if self.signals_fn else "",
             next_event=event[0] if event else None,
             minutes_to_event=event[1] if event else None,
         )

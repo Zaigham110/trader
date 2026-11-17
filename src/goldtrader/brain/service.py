@@ -122,6 +122,7 @@ class BrainService:
             clock_ms=self.clock_ms,
             event_fn=self._next_event,
             positioning_fn=lambda: self.cot_store.line(self.clock_ms()),
+            signals_fn=self._channel_signals,
         )
         self.dispatcher = None
         if sender is not None and owner_chat_id is not None:
@@ -351,6 +352,16 @@ class BrainService:
         veto.store(
             self.repo.c, veto.REPORT_NAME, veto.build(self.repo.c, self.cfg, self.strat, now), now
         )
+
+    def _channel_signals(self) -> str:
+        """Fresh Telegram channel signals for the Strategy agent (D-062). Numbers and the channel's
+        measured record only; never a channel's own wording."""
+        from goldtrader.signals.report import fresh_line
+
+        try:
+            return fresh_line(self.repo.c, self.clock_ms())
+        except Exception:  # noqa: BLE001 - optional context must never stop a cycle
+            return ""
 
     def _next_event(self) -> tuple[str, float] | None:
         """Next high-impact calendar event and the minutes to it, for the Strategy and

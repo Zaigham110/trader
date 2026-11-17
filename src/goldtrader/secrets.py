@@ -17,6 +17,8 @@ KNOWN = (
     "ANTHROPIC_API_KEY",
     "TELEGRAM_BOT_TOKEN",
     "TELEGRAM_OWNER_CHAT_ID",
+    "TELEGRAM_API_ID",  # signal reader (D-061): the owner's app id from my.telegram.org
+    "TELEGRAM_API_HASH",
     "GATEWAY_TOKEN",
     "ALLOW_LIVE",
 )
@@ -84,6 +86,6 @@ def all_secret_values() -> list[str]:
     out = []
     for n in KNOWN:
         v = get_secret(n, required=False)
-        if v and n not in ("MT5_LOGIN", "MT5_SERVER", "TELEGRAM_OWNER_CHAT_ID"):
+        if v and n not in ("MT5_LOGIN", "MT5_SERVER", "TELEGRAM_OWNER_CHAT_ID", "TELEGRAM_API_ID"):
             out.append(v)
     return out

@@ -52,6 +52,11 @@ CODE_AGENTS: tuple[tuple[str, str, str], ...] = (
     ("execution", "Execution", "Deterministic: the only component that reaches the broker"),
     ("risk_engine", "Risk engine", "Deterministic: hard limits on every order"),
     ("health", "Health", "Deterministic: heartbeats, alerts, incidents"),
+    (
+        "telegram_signals",
+        "Telegram signals",
+        "Reads the channels you follow, alerts you and shows fresh signals to Strategy",
+    ),
 )
 
 
@@ -224,11 +229,24 @@ def _code_agents(conn: sqlite3.Connection, now_ms: int, day: int) -> list[dict[s
             + (f"; last reason: {reject['risk_code']}" if reject else ""),
         ),
         "health": (
-            bool(hb) and not any(p["stale"] for p in hb.values()) and n_inc == 0,
+            bool(hb)
+            and not any(p["stale"] for k, p in hb.items() if k != "signals")  # optional
+            and n_inc == 0,
             max((p["last_ms"] for p in hb.values()), default=None),
             f"{n_inc} open incident(s); {n_alerts} alert(s) today",
         ),
     }
+    sg = hb.get("signals")
+    n_sig, last_sig = (0, None)
+    if table_exists(conn, "signals"):
+        n_sig, last_sig = conn.execute(
+            "SELECT COUNT(*), MAX(posted_ms) FROM signals WHERE posted_ms >= ?", (day,)
+        ).fetchone()
+    info["telegram_signals"] = (
+        bool(sg) and not sg["stale"],
+        last_sig or (sg["last_ms"] if sg else None),
+        f"{n_sig} signal(s) read today" if sg else "not set up yet (goldctl signals-login)",
+    )
     out = []
     for key, label, role in CODE_AGENTS:
         ok, at, summary = info[key]
@@ -503,7 +521,15 @@ def snapshot(
         "paper": paper(conn),
         "positioning": positioning(conn, now_ms),
         "veto": stored_report(conn, "veto"),
+        "signals": signal_channels(conn, now_ms),
     }
+
+
+def signal_channels(conn: sqlite3.Connection, now_ms: int) -> dict[str, Any] | None:
+    """Telegram signal channels and how their signals played out on our prices (D-061)."""
+    from goldtrader.signals.report import scorecard
+
+    return scorecard(conn, now_ms)
 
 
 TIMEFRAMES = (1, 5, 15, 60)  # minutes

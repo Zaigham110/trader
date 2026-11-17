@@ -808,6 +808,222 @@ def veto_report(
     typer.echo(rep["verdict"])
 
 
+def _signal_api() -> tuple[int, str]:
+    from goldtrader.secrets import get_secret
+
+    api_id = get_secret("TELEGRAM_API_ID", required=False)
+    api_hash = get_secret("TELEGRAM_API_HASH", required=False)
+    if not api_id or not api_hash or not api_id.strip().isdigit():
+        typer.echo(
+            "Telegram app id and hash are not stored. Create them at https://my.telegram.org "
+            "(API development tools), then run `goldctl secret-set TELEGRAM_API_ID` and "
+            "`goldctl secret-set TELEGRAM_API_HASH`.",
+            err=True,
+        )
+        raise typer.Exit(code=2)
+    return int(api_id.strip()), api_hash.strip()
+
+
+def _signal_errors(e: Exception) -> None:
+    """Explain the usual failures without a stack trace."""
+    name = type(e).__name__
+    if name == "NotLoggedIn":
+        typer.echo("Not logged in to Telegram. Run `goldctl signals-login` first.", err=True)
+    elif "locked" in str(e).lower():
+        typer.echo("The login file is in use: stop the signal reader, then try again.", err=True)
+    elif name == "ModuleNotFoundError":
+        typer.echo('Telethon is not installed: uv pip install "telethon>=1.36,<2"', err=True)
+    elif isinstance(e, (ConnectionError, TimeoutError, OSError)):
+        typer.echo(
+            "Could not reach Telegram. Some networks block it over IPv4: run the same command "
+            "again with --ipv6.",
+            err=True,
+        )
+    else:
+        typer.echo(f"Telegram error: {name}: {e}", err=True)
+    raise typer.Exit(code=2) from e
+
+
+@app.command("signals-login")
+def signals_login(
+    config: Path = typer.Option(Path("config/demo.yaml")),
+    ipv6: bool = typer.Option(False, help="Connect to Telegram over IPv6"),
+) -> None:
+    """Log the signal reader in to your own Telegram account (once). Run this yourself: Telegram
+    sends a code to your app and you type it here. The login is kept in state/ and never shown."""
+    from goldtrader.signals import telegram_user as tu
+
+    cfg = _load(config)
+    api_id, api_hash = _signal_api()
+    try:
+        who = tu.login(Path(cfg.data.db_dir), api_id, api_hash, ipv6=ipv6)
+    except Exception as e:  # noqa: BLE001
+        _signal_errors(e)
+    typer.echo(f"logged in as {who}. Next: `goldctl signals-channels` to pick channels.")
+
+
+@app.command("signals-channels")
+def signals_channels(
+    config: Path = typer.Option(Path("config/demo.yaml")),
+    db: Path = typer.Option(Path("state/demo.sqlite")),
+    find: str = typer.Option("", help="Only names containing this text"),
+    ipv6: bool = False,
+) -> None:
+    """List the channels and groups your account is in, with the command that watches each."""
+    from goldtrader.signals import telegram_user as tu
+
+    cfg = _load(config)
+    api_id, api_hash = _signal_api()
+    try:
+        chats = tu.list_chats(Path(cfg.data.db_dir), api_id, api_hash, ipv6=ipv6)
+    except Exception as e:  # noqa: BLE001
+        _signal_errors(e)
+    conn = connect(db)
+    migrate(conn)
+    on = {r[0] for r in conn.execute("SELECT id FROM signal_channels WHERE active=1")}
+    import unicodedata
+
+    def plain(s: str) -> str:  # channel names often use styled letters ("𝐆𝐨𝐥𝐝"), so fold them
+        return unicodedata.normalize("NFKC", s).casefold()
+
+    want = plain(find.lstrip("@"))
+    shown = [c for c in chats if want in plain(c["name"]) or want in plain(c["username"] or "")]
+    for c in sorted(shown, key=lambda c: c["name"].lower()):
+        mark = "WATCHED" if c["id"] in on else "       "
+        typer.echo(f"{mark} {c['kind']:<7} {c['id']:>15}  {c['name']}")
+    typer.echo(
+        f"{len(shown)} of {len(chats)} chats. Watch one with: goldctl signals-add <id> "
+        '--name "<name>"   (add --gold-only when every signal there is gold)'
+    )
+
+
+@app.command("signals-add", context_settings={"ignore_unknown_options": True})  # ids are negative
+def signals_add(
+    chat_id: int = typer.Argument(..., help="The id shown by signals-channels"),
+    name: str = typer.Option(..., help="A name for the dashboard"),
+    gold_only: bool = typer.Option(False, help="Treat every signal there as gold"),
+    db: Path = typer.Option(Path("state/demo.sqlite")),
+) -> None:
+    """Start recording a channel or group. The running reader picks it up within a minute."""
+    import time as _time
+
+    from goldtrader.signals.service import SignalService
+
+    conn = connect(db)
+    migrate(conn)
+    SignalService(conn, "", lambda: int(_time.time() * 1000)).add_channel(
+        chat_id, name, gold_only=gold_only
+    )
+    typer.echo(f"watching {name} ({chat_id}){' as gold-only' if gold_only else ''}")
+
+
+@app.command("signals-remove", context_settings={"ignore_unknown_options": True})
+def signals_remove(
+    chat_id: int = typer.Argument(...), db: Path = typer.Option(Path("state/demo.sqlite"))
+) -> None:
+    """Stop recording a channel (what was recorded is kept)."""
+    import time as _time
+
+    from goldtrader.signals.service import SignalService
+
+    conn = connect(db)
+    migrate(conn)
+    ok = SignalService(conn, "", lambda: int(_time.time() * 1000)).remove_channel(chat_id)
+    typer.echo(f"{chat_id}: {'stopped' if ok else 'not found'}")
+
+
+@app.command("signals")
+def signals_run(
+    config: Path = typer.Option(Path("config/demo.yaml")),
+    db: Path = typer.Option(Path("state/demo.sqlite")),
+    ai: bool = typer.Option(True, help="Let a small model read messages the rules cannot"),
+    ai_daily_cap_usd: float = 0.25,
+    alerts: bool = typer.Option(True, help="Alert you through your bot for each fresh signal"),
+    ipv6: bool = False,
+    minutes: float | None = None,
+) -> None:
+    """Run the Telegram signal agent (D-061, D-062): record watched channels, extract gold signals,
+    alert you, show fresh ones to the Strategy agent and score them on our own prices. It never
+    posts to the channels and never reaches the gateway."""
+    import logging
+    import time as _time
+
+    from goldtrader.notify.redact import install as install_redaction
+    from goldtrader.process.exitlog import ExitLog
+    from goldtrader.process.lock import acquire
+    from goldtrader.secrets import all_secret_values, get_secret
+    from goldtrader.signals import telegram_user as tu
+    from goldtrader.signals.service import SignalService, make_ai
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    logging.getLogger("telethon").setLevel(logging.WARNING)
+    install_redaction(logging.getLogger(), all_secret_values())
+    cfg = _load(config)
+    api_id, api_hash = _signal_api()
+    state_dir = Path(cfg.data.db_dir)
+    ExitLog(state_dir / "signals.exit.log").install("signals")
+    with acquire("signals", state_dir):
+        conn = connect(db)
+        migrate(conn)
+        repo = Repo(conn)
+        ask = None
+        if ai and get_secret("ANTHROPIC_API_KEY", required=False):
+            from goldtrader.llm.anthropic_provider import AnthropicProvider
+
+            ask = make_ai(AnthropicProvider(cfg.llm))
+        svc = SignalService(
+            conn,
+            cfg.account.symbol,
+            lambda: int(_time.time() * 1000),
+            ai=ask,
+            ai_daily_cap_usd=ai_daily_cap_usd,
+            alerts=alerts,
+        )
+        typer.echo(
+            f"signal reader up: {len(svc.watched())} channels watched, "
+            f"model fallback {'on' if ask else 'off'}"
+        )
+        try:
+            tu.run(
+                svc,
+                state_dir,
+                api_id,
+                api_hash,
+                heartbeat=lambda status: repo.heartbeat("signals", status),
+                ipv6=ipv6,
+                minutes=minutes,
+            )
+        except KeyboardInterrupt:
+            pass
+        except Exception as e:  # noqa: BLE001
+            _signal_errors(e)
+
+
+@app.command("signals-report")
+def signals_report(db: Path = typer.Option(Path("state/demo.sqlite"))) -> None:
+    """Scorecard per watched channel: signals posted, how they played out on our prices, in R."""
+    import time as _time
+
+    from goldtrader.signals.report import scorecard
+
+    conn = connect(db)
+    migrate(conn)
+    rep = scorecard(conn, int(_time.time() * 1000))
+    if not rep or not rep["channels"]:
+        typer.echo("no channels are watched yet (goldctl signals-channels, then signals-add)")
+        return
+    typer.echo(f"reader: {'running' if rep['reader_running'] else 'NOT running'}")
+    for c in rep["channels"]:
+        mean = "n/a" if c["mean_r"] is None else f"{c['mean_r']:+.2f}"
+        typer.echo(
+            f"{c['name']} [{'on' if c['active'] else 'off'}]: {c['messages']} messages, "
+            f"{c['signals']} signals; {c['closed']} played out, {c['wins']} won, total "
+            f"{c['sum_r']:+.2f} R, mean {mean} R; {c['running']} running, {c['expired']} never "
+            f"filled, {c['no_stop']} without a stop, {c['edited']} edited later, "
+            f"{c['deleted']} deleted" + ("" if c["enough"] else "  (too few to judge)")
+        )
+
+
 @app.command("dashboard")
 def dashboard(
     config: Path = typer.Option(Path("config/demo.yaml")),
