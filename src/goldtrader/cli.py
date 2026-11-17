@@ -784,12 +784,18 @@ def secret_set(name: str) -> None:
     """Store a secret in the OS credential store (prompts; the value is never echoed)."""
     from goldtrader.secrets import KNOWN, set_secret
 
-    if name not in KNOWN:
-        typer.echo(f"unknown secret name; choose one of {KNOWN}", err=True)
+    cleaned = "".join(ch for ch in name if ch.isalnum() or ch == "_").upper()
+    if cleaned not in KNOWN:
+        typer.echo(
+            f"unknown secret name {name!r} (read as {cleaned!r}); choose one of {KNOWN}", err=True
+        )
         raise typer.Exit(code=1)
-    value = typer.prompt(f"value for {name}", hide_input=True)
-    where = set_secret(name, value)
-    typer.echo(f"{name} stored in {where}")
+    value = typer.prompt(f"value for {cleaned}", hide_input=True).strip()
+    if not value:
+        typer.echo("empty value; nothing stored", err=True)
+        raise typer.Exit(code=1)
+    where = set_secret(cleaned, value)
+    typer.echo(f"{cleaned} stored in {where}")
 
 
 @app.command("mt5-tests")
