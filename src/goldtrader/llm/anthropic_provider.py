@@ -276,7 +276,14 @@ def map_exception(e: BaseException) -> ProviderError:
 
     Most-specific first (shared/error-codes.md → "Catch most-specific first, in a chain").
     """
+    body = getattr(e, "body", None)
+    detail = ""
+    if isinstance(body, dict):
+        err = body.get("error") if isinstance(body.get("error"), dict) else body
+        detail = str(err.get("message") or err.get("type") or "") if isinstance(err, dict) else ""
     msg = redact(str(getattr(e, "message", None) or e))
+    if detail and detail not in msg:
+        msg = f"{msg} — {redact(detail)}"
     if isinstance(e, anthropic.APITimeoutError):
         return ProviderTransientError(f"timeout: {msg}")
     if isinstance(e, anthropic.APIConnectionError):
