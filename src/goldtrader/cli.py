@@ -374,6 +374,17 @@ def gateway(
         svc = GatewayService(client, cfg, repo, token=token, port=port, events_fn=events_fn)
         svc.start()
         repo.heartbeat("gateway", "started", {"port": svc.api.port if svc.api else None})
+        try:  # prices missed while the gateway was not running (D-067)
+            from goldtrader.data.refill import refill_missing_bars
+            from goldtrader.mt5 import constants as K
+
+            added = refill_missing_bars(
+                client, repo, svc.symbol, K.TIMEFRAME_M1, int(__import__("time").time())
+            )
+            if added:
+                typer.echo(f"refilled {added} missing 1-minute bars from the terminal history")
+        except Exception as e:  # noqa: BLE001 - history is a convenience, never a reason not to start
+            typer.echo(f"could not refill missing bars: {type(e).__name__}: {e}", err=True)
         typer.echo(
             f"gateway up: symbol={svc.symbol} port={svc.api.port if svc.api else None} "
             f"profile={cfg.owner.profile} mode={cfg.owner.mode}"
