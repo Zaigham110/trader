@@ -27,7 +27,7 @@ import sqlite3
 import uuid
 import zlib
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Protocol
 
 from goldtrader.bots.common import BotContext, context_hash
@@ -211,10 +211,14 @@ class DecisionCycle:
             status = "wait" if outcome.reason == "wait" else "gated"
             self._update_proposal(proposal_id, status, outcome.reason)
             res.status = status
-            return
+            probe = self._code_only(ctx, res, gi, strat, outcome.reason)
+            if probe is None:
+                return
+            proposal_id, intent = probe  # the agent's own proposal stays as journaled
+        else:
+            intent = outcome.intent
 
         # Intent → gateway (the gateway re-runs the risk engine on every intent)
-        intent = outcome.intent
         self._record_intent(intent)
         result = self.gateway.send_intent(intent)
         self._finish_intent(result)
@@ -297,6 +301,63 @@ class DecisionCycle:
             res.gate_reason = run.failure_reason or run.status
             return None, run.run_id
         return out, run.run_id
+
+    def _code_only(
+        self, ctx: BotContext, res: CycleResult, gi: GateInput, strat: StrategyConfig, why: str
+    ) -> tuple[str, Intent] | None:
+        """Capped code-only demo trades (D-068). When the Strategy agent declined a signal
+        (it waited, or its confidence was under the bar), a demo account may still take a
+        few of them a day, so the order path and the post-trade review run on real fills.
+        Only an agent veto is overridden, never a code rule: the same gates run again on the
+        rule's own stop and target, and the gateway's risk engine checks the intent as always."""
+        o = self.cfg.owner
+        cap = int(getattr(o, "code_only_demo_trades_per_day", 0) or 0)
+        if cap <= 0 or o.mode != "demo" or self.cfg.account.environment != "demo":
+            return None
+        if ctx.signal_side == 0 or not (why == "wait" or why.startswith("confidence_")):
+            return None
+        day = ctx.now_ms - ctx.now_ms % 86_400_000
+        n, last = self.c.execute(
+            "SELECT COUNT(*), MAX(created_ms) FROM proposals WHERE bot='code_only' "
+            "AND gate_status='sent' AND created_ms >= ?",
+            (day,),
+        ).fetchone()
+        if n >= cap:
+            return None
+        newest = self.c.execute(
+            "SELECT MAX(created_ms) FROM proposals WHERE bot='code_only' AND gate_status='sent'"
+        ).fetchone()[0]
+        if newest is not None and ctx.now_ms - int(newest) < o.code_only_min_gap_minutes * 60_000:
+            return None
+        lo, hi, rr = atr_bounds(self.cfg, strat)
+        stop = min(max(float(strat.params.get("stop_atr", 1.0)), lo), hi)
+        target = max(float(strat.params.get("target_atr", 1.5)), stop * rr)
+        side = "long" if ctx.signal_side > 0 else "short"
+        p = StrategyProposal(
+            action="enter",
+            side=side,
+            stop_atr=stop,
+            target_atr=target,
+            confidence=1.0,
+            thesis=(
+                f"code-only demo trade ({strat.id}): {side} on the rule's signal; the Strategy "
+                f"agent declined ({why}). Taken to exercise the order path, {n + 1} of {cap} today."
+            ),
+            invalidation="the stop is hit",
+            horizon_minutes=120,
+            agrees_with_signal=True,
+        )
+        pid = uuid.uuid4().hex[:16]
+        self._record_signal_only(pid, p, ctx, f"code_only:{why}", bot="code_only")
+        out = gate_entry(
+            replace(gi, proposal=p, proposal_id=pid, now_ms=self.clock_ms()), self.cfg, strat
+        )
+        self._step(res, "code_only", ok=out.ok, reason=out.reason, agent=why)
+        if not out.ok or out.intent is None:
+            self._update_proposal(pid, "gated", out.reason)
+            return None
+        res.gate_reason = "code_only"
+        return pid, out.intent
 
     def _signal_only_proposal(self, ctx: BotContext) -> StrategyProposal:
         lo, hi, rr = atr_bounds(self.cfg, self.strat)
@@ -387,7 +448,12 @@ class DecisionCycle:
         )
 
     def _record_signal_only(
-        self, proposal_id: str, p: StrategyProposal, ctx: BotContext, why: str
+        self,
+        proposal_id: str,
+        p: StrategyProposal,
+        ctx: BotContext,
+        why: str,
+        bot: str = "signal_only",
     ) -> None:
         self.c.execute(
             "INSERT OR REPLACE INTO proposals(proposal_id, created_ms, bot, bundle_id, action, side, "
@@ -396,7 +462,7 @@ class DecisionCycle:
             (
                 proposal_id,
                 ctx.now_ms,
-                "signal_only",
+                bot,
                 self.strat.id,
                 p.action,
                 p.side,

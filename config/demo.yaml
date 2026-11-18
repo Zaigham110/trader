@@ -16,6 +16,10 @@ strategies:
 owner:
   profile: normal
   mode: demo
+  # D-068: take up to 3 of the rule's signals a day on the demo account even when the Strategy
+  # agent declines them, at least 4 hours apart. Every code gate and risk limit still applies.
+  code_only_demo_trades_per_day: 3
+  code_only_min_gap_minutes: 240
   risk:
     risk_per_trade_pct: 0.5
     daily_loss_pct: 2.0

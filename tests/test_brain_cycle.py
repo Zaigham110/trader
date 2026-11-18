@@ -318,3 +318,83 @@ def test_registry_records_news_events_and_dropped():
     assert dr["item_id"] == "n2" and dr["reason"] == "duplicate"
     prompts = {r["name"] for r in conn.execute("SELECT name FROM prompts")}
     assert "research.extract.system" in prompts and "strategy.system" in prompts
+
+
+# ----------------------------------------------------------------- code-only demo trades (D-068)
+LOW_CONF = {**GOOD_PROPOSAL, "confidence": 0.5}
+WAIT_ON_SIGNAL = {**WAIT_PROPOSAL, "thesis": "The rule has been below break-even; waiting."}
+
+
+def _probe_cycle(gw, per_day=2, gap=60, signal=1, **owner):
+    cyc, reg, fake, conn, clock = _cycle(gw, signal=signal)
+    cyc.cfg = cfg(
+        owner={
+            "risk": {"max_volume_lots": 1.0},
+            "code_only_demo_trades_per_day": per_day,
+            "code_only_min_gap_minutes": gap,
+            **owner,
+        }
+    )
+    return cyc, fake, conn, clock
+
+
+def test_demo_takes_a_capped_number_of_signals_the_agent_declined():
+    gw = FakeGateway(state())
+    cyc, fake, conn, clock = _probe_cycle(gw)
+    fake.script("fast", [RISK_OK] * 6)
+    fake.script("standard", [WAIT_ON_SIGNAL, LOW_CONF, WAIT_ON_SIGNAL, WAIT_ON_SIGNAL])
+    res = cyc.run_once()
+    assert res.status == "sent" and res.gate_reason == "code_only" and len(gw.intents) == 1
+    it = gw.intents[0]
+    assert it.kind == "enter" and it.side == "long"
+    assert (it.stop_price, it.target_price) == (3960.2, 4060.2)  # the rule's own 1.0 / 1.5 ATR
+    props = {p["bot"]: p for p in _rows(conn, "proposals")}
+    assert props["strategy"]["gate_status"] == "wait"  # the agent's decision stays as it was
+    assert props["strategy"]["proposal_id"] == res.proposal_id
+    probe = props["code_only"]
+    assert probe["gate_status"] == "sent" and probe["proposal_id"] == it.proposal_id
+    assert "agent declined (wait)" in probe["thesis"] and "1 of 2 today" in probe["thesis"]
+    steps = [s["step"] for s in json.loads(_rows(conn, "brain_cycles")[0]["steps_json"])]
+    assert steps[-3:] == ["gate", "code_only", "intent"]
+    # too soon after the last one: the gap holds even though the daily cap is not reached
+    clock["t"] += 30 * 60_000
+    assert cyc.run_once().status == "gated" and len(gw.intents) == 1
+    clock["t"] += 31 * 60_000  # NOW is 23:46 UTC, so this is the next UTC day: the count restarts
+    assert cyc.run_once().status == "sent" and len(gw.intents) == 2
+    clock["t"] += 61 * 60_000
+    assert cyc.run_once().status == "sent" and len(gw.intents) == 3  # 2 of 2 for the new day
+    clock["t"] += 61 * 60_000
+    fake.script("standard", [WAIT_ON_SIGNAL])
+    assert cyc.run_once().status == "wait" and len(gw.intents) == 3  # daily cap reached
+
+
+def test_code_only_never_overrides_a_code_rule_and_is_demo_only():
+    for kwargs, st, signal, script in (
+        ({"per_day": 0}, state(), 1, WAIT_ON_SIGNAL),  # switched off (the default)
+        ({}, state(), 0, WAIT_PROPOSAL),  # no signal from the rule
+        ({}, state(open_positions=1), 1, WAIT_ON_SIGNAL),  # a code gate still blocks it
+        ({}, state(session="CLOSE_ONLY", entries_allowed=False), 1, WAIT_ON_SIGNAL),
+        ({"mode": "shadow"}, state(), 1, WAIT_ON_SIGNAL),  # not a demo-mode system
+    ):
+        gw = FakeGateway(st)
+        cyc, fake, conn, _ = _probe_cycle(gw, signal=signal, **kwargs)
+        fake.script("fast", [RISK_OK])
+        fake.script("standard", [script])
+        res = cyc.run_once()
+        assert gw.intents == [] and res.status in ("wait", "gated", "blocked"), kwargs
+    # an agent that disagrees with the signal is a code block (not a veto): nothing is forced
+    gw = FakeGateway(state())
+    cyc, fake, conn, _ = _probe_cycle(gw, signal=-1)
+    fake.script("fast", [RISK_OK])
+    fake.script("standard", [GOOD_PROPOSAL])  # proposes long against a short signal
+    res = cyc.run_once()
+    assert res.gate_reason == "disagrees_with_signal" and gw.intents == []
+    # and with the risk budget at zero nothing is sent either
+    gw = FakeGateway(state())
+    cyc, fake, conn, _ = _probe_cycle(gw)
+    fake.script("fast", [{"budget": 0, "reasons": ["event risk"]}])
+    fake.script("standard", [WAIT_ON_SIGNAL])
+    assert cyc.run_once().status == "wait" and gw.intents == []
+    assert [p["gate_reason"] for p in _rows(conn, "proposals") if p["bot"] == "code_only"] == [
+        "risk_budget_zero"
+    ]
