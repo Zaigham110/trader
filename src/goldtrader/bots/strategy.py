@@ -32,7 +32,7 @@ from goldtrader.llm.runtime import AgentSpec
 
 NEWS_LOOKBACK_MS = 6 * 3600 * 1000
 RECENT_TRADES = 10
-LATEST_LESSONS = 5
+LATEST_LESSONS = 8
 
 STRATEGY_PROMPT = register(
     "strategy.system",
@@ -102,7 +102,8 @@ def build_strategy_messages(ctx: BotContext, strat: StrategyConfig) -> list[dict
         f"{bullet_list(recent_news(ctx.news_events, ctx.now_ms), max_items=20)}\n\n"
         f"Last {RECENT_TRADES} trades:\n"
         f"{bullet_list(ctx.recent_trades[:RECENT_TRADES], max_items=RECENT_TRADES)}\n\n"
-        f"Latest {LATEST_LESSONS} lessons:\n"
+        f"Playbook and lessons (measured from this system's own results; up to "
+        f"{LATEST_LESSONS}):\n"
         f"{bullet_list(ctx.lessons[:LATEST_LESSONS], max_items=LATEST_LESSONS)}\n\n"
         f"Calibration: {ctx.calibration_line or 'no calibration data yet'}\n"
         f"Positioning: {ctx.positioning_line or 'no positioning data'}\n"

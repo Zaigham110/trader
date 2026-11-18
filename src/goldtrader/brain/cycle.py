@@ -242,7 +242,7 @@ class DecisionCycle:
             gateway_state=state,
             signal_side=int(self.signal_fn()),
             recent_trades=list(self.trades_fn())[:10],
-            lessons=list(self.lessons_fn())[:5],
+            lessons=list(self.lessons_fn())[:8],
             news_events=list(self.news_fn()),
             open_position=dict(positions[0]) if positions else None,
             calibration_line=self.calibration_fn() if self.calibration_fn else "",

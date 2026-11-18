@@ -522,6 +522,7 @@ def snapshot(
         "positioning": positioning(conn, now_ms),
         "veto": stored_report(conn, "veto"),
         "signals": signal_channels(conn, now_ms),
+        "learning": stored_report(conn, "learning"),
     }
 
 

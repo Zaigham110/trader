@@ -342,6 +342,9 @@ def gateway(
     fake: bool = typer.Option(False, "--fake/--real"),
     port: int = 8750,
     minutes: float | None = None,
+    watchdog_s: float = typer.Option(
+        120.0, help="Restart if the loop makes no progress for this long (0 = off)"
+    ),
 ) -> None:
     """Run the gateway process: MT5 polling, risk, execution, reconciliation, loopback API."""
     import logging
@@ -357,7 +360,8 @@ def gateway(
     install_redaction(logging.getLogger(), all_secret_values())
     cfg = _load(config)
     state_dir = Path(cfg.data.db_dir)
-    ExitLog(state_dir / "gateway.exit.log").install("gateway")
+    exit_log = ExitLog(state_dir / "gateway.exit.log")
+    exit_log.install("gateway")
     with acquire("gateway", state_dir):
         conn = connect(db)
         migrate(conn)
@@ -384,10 +388,26 @@ def gateway(
         stop = threading.Event()
         if minutes:
             threading.Timer(minutes * 60, stop.set).start()
+        dog = None
+        if watchdog_s > 0:
+            from goldtrader.process.watchdog import Watchdog
+
+            dog = Watchdog(
+                watchdog_s,
+                name="gateway loop",
+                dump_path=state_dir / "gateway.stuck.log",
+                on_exit=lambda why: exit_log.record_exit("watchdog", why),
+            )
+            svc.on_step = dog.beat
+            dog.start()
         try:
             svc.run(stop)
         finally:
-            svc.stop()
+            try:
+                svc.stop()
+            finally:
+                if dog is not None:
+                    dog.stop()  # a clean shutdown is not a stuck loop
 
 
 @app.command("brain")
@@ -611,9 +631,12 @@ def strategy_search(
     holdout: float = typer.Option(1 / 3, help="Share of the stored history held back"),
     out: Path = typer.Option(Path("reports/search")),
     store_runs: bool = typer.Option(True, help="Store finalists as Time machine runs"),
+    kinds: str = typer.Option(
+        "trend", help="Families to search, comma-separated: trend, range, channel, session"
+    ),
 ) -> None:
-    """Search slower-bar versions of the trend strategy that survive recorded costs. Ranks on the
-    earlier part of the stored history and checks the best on the held-out later part."""
+    """Search strategy families for versions that survive recorded costs. Ranks on the earlier
+    part of the stored history and checks the best on the held-out later part."""
     import time as _time
 
     from goldtrader.backtest import search as ss
@@ -662,7 +685,14 @@ def strategy_search(
         )
 
     typer.echo("in-sample results (earlier part of the history):")
-    res = ss.run_search(conn, cfg, spec, holdout=holdout, on_trial=on_trial, frame=frame)
+    try:
+        cands = ss.grid(tuple(k.strip() for k in kinds.split(",") if k.strip()))
+    except ValueError as e:
+        typer.echo(str(e), err=True)
+        raise typer.Exit(code=1) from e
+    res = ss.run_search(
+        conn, cfg, spec, holdout=holdout, candidates=cands, on_trial=on_trial, frame=frame
+    )
     out.mkdir(parents=True, exist_ok=True)
     path = out / f"search_{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}.json"
     path.write_text(json.dumps(res, indent=2), encoding="utf-8")
@@ -774,6 +804,73 @@ def paper_list(db: Path = typer.Option(Path("state/demo.sqlite"))) -> None:
             f"{r['n'] or 0} closed, net {r['net']:+.2f} USD at 0.01 lot, mean R {mean_r}, "
             f"{r['open_n'] or 0} open  - {r['label']}"
         )
+
+
+@app.command("learn-nightly")
+def learn_nightly(
+    config: Path = typer.Option(Path("config/demo.yaml")),
+    db: Path = typer.Option(Path("state/demo.sqlite")),
+    provider: str = typer.Option("anthropic", help="anthropic | none (code steps only)"),
+    night: str = typer.Option("", help="UTC date to record the run under (default: today's)"),
+) -> None:
+    """One pass of the learning loop (D-064): grade decisions, judge paper candidates, rewrite the
+    agents' playbook and test new strategy ideas. The brain starts this once per trading day."""
+    import time as _time
+
+    from goldtrader.learning import loop
+
+    cfg = _load(config)
+    conn = connect(db)
+    migrate(conn)
+    enabled = [s for s in cfg.strategies if s.enabled] or list(cfg.strategies)
+    spec = Repo(conn).latest_spec(cfg.account.symbol) or _default_spec(cfg.account.symbol)
+    now = lambda: int(_time.time() * 1000)  # noqa: E731
+    review_fn = ideas_fn = None
+    if provider == "anthropic":
+        from goldtrader.bots.nightly import make_fns
+        from goldtrader.llm.anthropic_provider import AnthropicProvider
+        from goldtrader.llm.store import LLMStore
+
+        review_fn, ideas_fn = make_fns(cfg, AnthropicProvider(cfg.llm), LLMStore(conn), now)
+    elif provider != "none":
+        typer.echo("provider: anthropic | none", err=True)
+        raise typer.Exit(code=2)
+    summary = loop.nightly(
+        conn,
+        cfg,
+        enabled[0],
+        spec,
+        now(),
+        review_fn=review_fn,
+        ideas_fn=ideas_fn,
+        night=night or None,
+    )
+    typer.echo(json.dumps(summary, indent=2, default=str))
+
+
+@app.command("learn-status")
+def learn_status(db: Path = typer.Option(Path("state/demo.sqlite"))) -> None:
+    """What the agents have learned so far: graded decisions, playbook, tested ideas."""
+    import time as _time
+
+    from goldtrader.learning import loop
+
+    conn = connect(db)
+    migrate(conn)
+    st = loop.status(conn, int(_time.time() * 1000))
+    last = st.get("last_run")
+    typer.echo(
+        f"last nightly run: {last['night']} ({last['status']})" if last else "no nightly run yet"
+    )
+    typer.echo(f"signals seen {st['signals_seen']}, played out and graded {st['signals_graded']}")
+    typer.echo(f"agent record: {st['calibration'] or 'too few graded signals yet (needs 10)'}")
+    typer.echo(f"playbook ({len(st['playbook'])} lessons):")
+    for p in st["playbook"]:
+        typer.echo(f"  - [{p['tag']}, n={p['evidence_n']}] {p['text']}")
+    typer.echo(f"strategy ideas tested: {st['ideas_total']}, held: {st['ideas_held']}")
+    for i in st["ideas"]:
+        paper = f" -> paper {i['paper_bundle_id']}" if i["paper_bundle_id"] else ""
+        typer.echo(f"  {i['night']} {i['status']:<15} {i['what']}{paper}")
 
 
 @app.command("veto-report")

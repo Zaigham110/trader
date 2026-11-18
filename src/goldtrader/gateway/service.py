@@ -82,6 +82,7 @@ class GatewayService:
         self.pnl = PnLTracker()
         self.counters = GatewayCounters()
         self._lock = threading.RLock()
+        self.on_step = None  # called after every loop step (the watchdog's heartbeat, D-065)
         self._snapshot: Snapshot | None = None
         self.api: GatewayAPI | None = None
         self.started = False
@@ -311,5 +312,7 @@ class GatewayService:
         d = self.cfg.data
         while not stop.is_set():
             snap = self.step()
+            if self.on_step is not None:
+                self.on_step()
             closed = snap is None or snap.session in (SessionState.CLOSED, SessionState.STALE)
             stop.wait((d.tick_poll_closed_s * 1000 if closed else d.tick_poll_ms) / 1000.0)

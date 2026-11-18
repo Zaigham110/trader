@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import logging
+import sys
 import threading
 import time
 from collections.abc import Callable
@@ -33,6 +34,15 @@ log = logging.getLogger(__name__)
 PAPER_EXPERIMENT = "paper"  # shadow_trades.experiment_id of owner paper candidates (D-059)
 
 
+def _spawn_detached(cmd: list[str]) -> object:
+    """Start the nightly learning run outside this process."""
+    import subprocess
+
+    return subprocess.Popen(  # noqa: S603 - fixed argv built by this module
+        cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL
+    )
+
+
 class BrainService:
     def __init__(
         self,
@@ -49,10 +59,16 @@ class BrainService:
         config_path=None,
         feed_fetch=None,
         cot_fetch=None,
+        spawn=None,
     ) -> None:
         self.cfg = cfg
         self.repo = repo
         self.gateway = gateway
+        self.config_path = config_path
+        self.provider_name = (
+            "anthropic" if type(provider).__name__ == "AnthropicProvider" else "none"
+        )
+        self.spawn = spawn or _spawn_detached
         self.clock_ms = clock_ms or (lambda: int(time.time() * 1000))
         enabled = [s for s in cfg.strategies if s.enabled]
         if not enabled:
@@ -118,7 +134,8 @@ class BrainService:
             signal_fn=self.feats.signal,
             news_fn=self._recent_news,
             trades_fn=self._recent_trades,
-            lessons_fn=lambda: self.registry.lessons(5),
+            lessons_fn=self._lessons,
+            calibration_fn=self._calibration,
             clock_ms=self.clock_ms,
             event_fn=self._next_event,
             positioning_fn=lambda: self.cot_store.line(self.clock_ms()),
@@ -214,10 +231,12 @@ class BrainService:
         self.scheduler.add(Job("learning", self._learning_job, daily_at_utc="23:30"))
         self.scheduler.add(Job("cot", self._cot_job, every_seconds=REFRESH_HOURS * 3600))
         self.scheduler.add(Job("veto_report", self._veto_report_job, every_seconds=900))
+        self.scheduler.add(Job("learning_loop", self._learning_loop_job, every_seconds=300))
         self.scheduler.add(Job("shadow", self._shadow_job, every_seconds=60))
         self.scheduler.add(Job("review", self._review_job, every_seconds=60))
         self.scheduler.add(Job("alerts", self._alerts_job, every_seconds=10))
         self.scheduler.add(Job("heartbeat", self._heartbeat_job, every_seconds=10))
+        self.scheduler.add(Job("gateway_watch", self._gateway_watch_job, every_seconds=60))
         if self.chat is not None:
             self.scheduler.add(
                 Job("chat", self._chat_job, every_seconds=max(1, cfg.chat.poll_seconds))
@@ -353,6 +372,59 @@ class BrainService:
             self.repo.c, veto.REPORT_NAME, veto.build(self.repo.c, self.cfg, self.strat, now), now
         )
 
+    def _learning_loop_job(self) -> None:
+        """Learning loop (D-064): grade new signal decisions, judge the paper candidates and,
+        once per trading day, start the nightly review in its own process (it runs backtests
+        and model calls that must not hold up this loop)."""
+        from goldtrader.learning import loop
+
+        now = self.clock_ms()
+        loop.score_decisions(self.repo.c, self.cfg, self.strat, now)
+        loop.review_paper(self.repo.c, now)
+        veto.store(self.repo.c, "learning", loop.status(self.repo.c, now), now)
+        night = loop.nightly_due(self.repo.c, now)
+        if night is None or self.config_path is None:
+            return
+        db = self.repo.c.execute("PRAGMA database_list").fetchone()[2]
+        if not db:
+            return
+        loop.mark_started(self.repo.c, night, now)
+        self.spawn(
+            [
+                sys.executable,
+                "-c",
+                "from goldtrader.cli import app; app()",
+                "learn-nightly",
+                "--config",
+                str(self.config_path),
+                "--db",
+                str(db),
+                "--provider",
+                self.provider_name,
+                "--night",
+                night,
+            ]
+        )
+        log.info("nightly learning started for %s", night)
+
+    def _lessons(self) -> list[str]:
+        """The playbook written by the nightly review, then the newest post-mortem lessons."""
+        from goldtrader.learning import loop
+
+        try:
+            book = loop.active_playbook(self.repo.c)
+        except Exception:  # noqa: BLE001 - optional context must never stop a cycle
+            book = []
+        return (book + self.registry.lessons(5))[:8]
+
+    def _calibration(self) -> str:
+        from goldtrader.learning import loop
+
+        try:
+            return loop.calibration_line(self.repo.c, self.clock_ms())
+        except Exception:  # noqa: BLE001
+            return ""
+
     def _channel_signals(self) -> str:
         """Fresh Telegram channel signals for the Strategy agent (D-062). Numbers and the channel's
         measured record only; never a channel's own wording."""
@@ -380,6 +452,13 @@ class BrainService:
     def _alerts_job(self) -> None:
         if self.dispatcher is not None:
             self.dispatcher.dispatch_pending(datetime.fromtimestamp(self.clock_ms() / 1000, UTC))
+
+    def _gateway_watch_job(self) -> None:
+        """Tell the owner when the gateway stops reporting (D-065). Heartbeats are stamped
+        with real time, so this compares against real time too."""
+        from goldtrader.process.watchdog import watch_heartbeat
+
+        watch_heartbeat(self.repo.c, "gateway", int(time.time() * 1000))
 
     def _heartbeat_job(self) -> None:
         self.repo.heartbeat(

@@ -292,10 +292,22 @@ footer{color:var(--dim);font-size:12px;padding:6px 2px 20px}
   <section class="grid">
     <div class="card">
       <h2>Telegram signal channels</h2>
-      <div class="tm-note">Signals from channels you follow, recorded the moment they are posted and played forward on our own prices with the real spread. R means multiples of the amount risked; the first target is the exit. Later edits and deletions are counted, not applied. These signals are measured only: they do not trade and the agents do not see them.</div>
+      <div class="tm-note">Signals from channels you follow, recorded the moment they are posted and played forward on our own prices with the real spread. R means multiples of the amount risked; the first target is the exit. Later edits and deletions are counted, not applied. A channel signal can never open a trade by itself: each fresh one is sent to you as an alert and shown to the Strategy agent as context with the channel's record.</div>
       <div id="sigHead" style="font-size:13px;margin-bottom:6px"></div>
       <div class="scroll" id="sigChannels" style="max-height:240px"></div>
       <div class="scroll" id="sigLatest" style="max-height:260px;margin-top:10px"></div>
+    </div>
+  </section>
+
+  <section class="grid">
+    <div class="card">
+      <h2>What the agents have learned</h2>
+      <div class="tm-note">Every time the rule wants a trade, the decision is graded against what the price then did. Once per trading day a review agent rewrites the playbook below from those measured numbers, and a research agent proposes strategy ideas that code tests on history; ideas that pass go to the paper test, never straight to the account. R means multiples of the amount risked.</div>
+      <div id="learnHead" style="font-size:13px;margin-bottom:6px"></div>
+      <div class="tm-cards" id="learnCards"></div>
+      <div id="learnRecord" class="dim" style="font-size:13px;margin:8px 0"></div>
+      <div class="scroll" id="learnBook" style="max-height:260px"></div>
+      <div class="scroll" id="learnIdeas" style="max-height:220px;margin-top:10px"></div>
     </div>
   </section>
 
@@ -594,6 +606,26 @@ function renderSignals(s) {
     const m = el("td", "dim", x.text.replace(/\s+/g, " ").slice(0, 90)); m.title = x.text; r.appendChild(m); t2.appendChild(r); }
   la.appendChild(t2);
 }
+function renderLearning(s) {
+  const v = s.learning, cards = $("learnCards"), book = $("learnBook"), ideas = $("learnIdeas"); clear(cards); clear(book); clear(ideas);
+  if (!v || !("signals_seen" in v)) { $("learnHead").textContent = "No learning data yet. It appears within five minutes of the brain starting."; $("learnRecord").textContent = ""; return; }
+  const run = v.last_run;
+  $("learnHead").textContent = run ? "Last nightly review: trading day " + run.night + " (" + (run.status === "done" ? "finished" : run.status === "running" ? "running now" : "finished with an error") + ")." : "No nightly review has run yet. The first one starts after the daily break (21:00 UTC).";
+  tmCard(cards, "Signals graded", String(v.signals_graded), "", v.signals_seen + " seen by a decision cycle");
+  tmCard(cards, "Playbook lessons", String(v.playbook.length), "", "read before every decision");
+  tmCard(cards, "Ideas tested", String(v.ideas_total), "", v.ideas_held + " passed and went to paper");
+  $("learnRecord").textContent = "Strategy agent's own record: " + (v.calibration || "too few graded signals yet (it needs 10).");
+  if (!v.playbook.length) book.appendChild(el("div", "empty", "The playbook is empty until the first nightly review."));
+  else { const t = el("table"), h = el("tr"); for (const k of ["Lesson", "Cases behind it"]) h.appendChild(el("th", null, k)); t.appendChild(h);
+    for (const p of v.playbook) { const r = el("tr"); r.appendChild(el("td", null, p.text)); r.appendChild(el("td", "num dim", String(p.evidence_n))); t.appendChild(r); }
+    book.appendChild(t); }
+  if (!v.ideas.length) { ideas.appendChild(el("div", "empty", "No strategy idea has been tested yet.")); return; }
+  const t2 = el("table"), h2 = el("tr"); for (const k of ["Night", "Idea", "Result"]) h2.appendChild(el("th", null, k)); t2.appendChild(h2);
+  const words = {holds: "passed, now on paper", fails: "failed", too_few_trades: "too few trades to judge"};
+  for (const i of v.ideas) { const r = el("tr"); r.appendChild(el("td", "num dim", i.night)); r.appendChild(el("td", null, i.what));
+    r.appendChild(el("td", i.status === "holds" ? "up" : "dim", words[i.status] || i.status)); t2.appendChild(r); }
+  ideas.appendChild(t2);
+}
 function renderCot(s) {
   const p = s.positioning, [g, W, H] = setup($("cotChart")), dim = css("--dim");
   if (!p) { $("cotHead").textContent = "No positioning data stored yet."; g.fillStyle = dim; g.textAlign = "center"; g.fillText("Waiting for the first report", W / 2, H / 2); return; }
@@ -606,7 +638,7 @@ function renderCot(s) {
   g.fillStyle = dim; g.textAlign = "left"; g.fillText(Math.round((hi - pad) / 1000) + "k", cw + 6, y(hi - pad)); g.fillText(Math.round((lo + pad) / 1000) + "k", cw + 6, y(lo + pad));
   g.fillText(h[0][0], 0, H - 8); g.textAlign = "right"; g.fillText(h[h.length - 1][0], cw, H - 8);
 }
-function render() { if (!snap) return; renderHeader(snap); renderAccount(snap); renderCycle(snap); renderAgents(snap); renderLists(snap); renderPaper(snap); renderVeto(snap); renderCot(snap); renderSignals(snap); drawChart(); drawEquity(); }
+function render() { if (!snap) return; renderHeader(snap); renderAccount(snap); renderCycle(snap); renderAgents(snap); renderLists(snap); renderPaper(snap); renderVeto(snap); renderCot(snap); renderSignals(snap); renderLearning(snap); drawChart(); drawEquity(); }
 
 /* ---------- data ---------- */
 async function get(path) { const r = await fetch(path, {cache: "no-store"}); if (!r.ok) throw new Error(path + " " + r.status); return r.json(); }

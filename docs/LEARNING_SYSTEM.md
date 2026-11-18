@@ -127,3 +127,19 @@ the champion or, during limited live, the challenger bundle by deterministic all
 weekly research job runs on Sundays; the learning job (intake → offline gate → stage advancement →
 monitors → rollback) is wired in the brain once the pipeline module lands. Numeric defaults are the
 §3 values and remain Assumptions until demo data exists.
+
+## 9. Learning loop (D-064, 2026-11-18)
+
+The pipeline above learns from real demo trades. The learning loop feeds the agents from what
+already happens every day, without waiting for them:
+
+- every decision where the rule wanted a trade is graded on real prices (`decision_scores`);
+- the Strategy agent sees its own record (the calibration line) and a playbook that a nightly
+  review agent rewrites from measured numbers only (`playbook`);
+- a nightly research agent proposes rule variants, code tests them with a held-out period, and
+  those that hold are paper-traded (`strategy_ideas`, `paper_candidates`);
+- a paper candidate with 100 closed trades is put in front of the owner or retired.
+
+Commands: `goldctl learn-status` (what has been learned), `goldctl learn-nightly` (one pass;
+the brain starts it once per trading day). Section 2's table still holds: nothing here can
+change a risk limit, and promotion to the demo account is the owner's decision.

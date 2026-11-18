@@ -11,7 +11,7 @@ import pytest
 
 from goldtrader.backtest import search as ss
 from goldtrader.backtest import timemachine as tm
-from goldtrader.backtest.strategies import TrendHTF, build_strategy
+from goldtrader.backtest.strategies import ChannelBreak, RangeFade, TrendHTF, build_strategy
 from goldtrader.cli import _default_spec
 from goldtrader.config import load_config
 from goldtrader.data.synthetic import generate_bars
@@ -118,3 +118,45 @@ def test_candidates_are_reported_with_the_stop_the_engine_really_uses(setup):
     )
     assert [c[1] for c in ss.unique([wide, same], cfg)] == ["w"]
     assert len(ss.unique(ss.grid(), cfg)) < len(ss.grid())
+
+
+def test_range_and_channel_rules_signal_on_completed_bars_without_look_ahead():
+    rng = np.random.default_rng(5)
+    mid = 4000 + np.cumsum(rng.normal(0, 0.6, 6000)) + 30 * np.sin(np.arange(6000) / 400)
+    df = _frame(mid)
+    fade = RangeFade(minutes=15, lookback=20, z_entry=1.5)
+    chan = ChannelBreak(minutes=15, lookback=20)
+    for s in (fade, chan):
+        side = s.signals(df).side
+        hits = np.nonzero(side)[0]
+        assert len(hits) >= 3 and set(np.unique(side)) <= {-1, 0, 1}
+        assert all((df["time"].iloc[i] + 60) % 900 == 0 for i in hits)
+        cut = int(hits[len(hits) // 2]) + 1  # causal: later bars never change an earlier signal
+        assert np.array_equal(s.signals(df.iloc[:cut]).side, side[:cut])
+        assert not s.signals(df.iloc[:200]).side.any()  # too little history: silent
+    # direction: the fade trades against the stretch, the channel with the break
+    last = np.nonzero((df["time"].to_numpy() + 60) % 900 == 0)[0]
+    close = pd.Series(mid[last])
+    i = int(np.nonzero(fade.signals(df).side[last])[0][0])
+    stretched_up = close.iloc[i] > close.iloc[i - 19 : i + 1].mean()
+    assert fade.signals(df).side[last[i]] == (-1 if stretched_up else 1)
+    j = int(np.nonzero(chan.signals(df).side[last])[0][0])
+    broke_up = close.iloc[j] > close.iloc[j - 20 : j].max()
+    assert chan.signals(df).side[last[j]] == (1 if broke_up else -1)
+    built = build_strategy("range_fade", "x", {"minutes": 60.0, "z_entry": 2.5})
+    assert (built.minutes, built.z_entry) == (60, 2.5)
+    assert build_strategy("channel_break", "y", {"lookback": 55.0}).lookback == 55
+
+
+def test_wider_families_are_fixed_grids_that_build_and_describe():
+    cfg = load_config("config/demo.yaml")
+    with pytest.raises(ValueError):
+        ss.grid(("martingale",))
+    assert ss.grid() == ss.grid(("trend",))  # the default search is unchanged
+    wide = ss.grid(("range", "channel", "session"))
+    assert len(wide) == 24 + 12 + 12 and len({c[1] for c in wide}) == len(wide)
+    for c in ss.unique(wide, cfg):
+        build_strategy(*c)
+        assert c[2]["target_atr"] > c[2]["stop_atr"] <= cfg.owner.risk.stop_atr_max
+        assert "current live strategy" not in ss.describe(c)
+    assert {c[0] for c in wide} == {"range_fade", "channel_break", "breakout_session"}

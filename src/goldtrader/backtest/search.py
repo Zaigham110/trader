@@ -45,7 +45,7 @@ KEEP = ("n_trades", "net_pnl", "net_return_pct", "hit_rate", "profit_factor", "e
 KEEP += ("max_drawdown_pct", "sharpe", "total_costs_usd", "cost_share_of_gross", "killed")
 
 
-def grid() -> list[Candidate]:
+def _trend_grid() -> list[Candidate]:
     out: list[Candidate] = []
     for minutes in MINUTES:
         for on_cross in (1.0, 0.0):
@@ -60,6 +60,79 @@ def grid() -> list[Candidate]:
                     }
                     name = f"htf_m{minutes}_{'cross' if on_cross else 'state'}_s{k}_r{rr}"
                     out.append(("trend_htf", name, params))
+    return out
+
+
+def _range_grid() -> list[Candidate]:
+    """Range reversal: fade a close stretched beyond a band of the last 20 bars."""
+    out: list[Candidate] = []
+    for minutes in (5, 15, 60):
+        for z in (2.0, 2.5):
+            for stop in (1.0, 1.5):
+                for rr in (1.5, 3.0):
+                    params = {
+                        "minutes": float(minutes),
+                        "lookback": 20.0,
+                        "z_entry": z,
+                        "stop_atr": stop,
+                        "target_atr": round(stop * rr, 2),
+                    }
+                    out.append(("range_fade", f"fade_m{minutes}_z{z}_s{stop}_r{rr}", params))
+    return out
+
+
+def _channel_grid() -> list[Candidate]:
+    """Channel breakout: a close beyond the last 20 or 55 bars, small stop, far target."""
+    out: list[Candidate] = []
+    for minutes in (15, 60):
+        for lookback in (20, 55):
+            for rr in (3.0, 8.0, 20.0):
+                params = {
+                    "minutes": float(minutes),
+                    "lookback": float(lookback),
+                    "stop_atr": 1.5,
+                    "target_atr": round(1.5 * rr, 2),
+                }
+                out.append(("channel_break", f"chan_m{minutes}_n{lookback}_r{rr}", params))
+    return out
+
+
+SESSIONS = {"asia": (0, 7, 7, 12), "london": (7, 12, 12, 17)}  # range hours, then trade hours, UTC
+
+
+def _session_grid() -> list[Candidate]:
+    """Session breakout: first close of the day beyond the earlier session's range."""
+    out: list[Candidate] = []
+    for name, (rs, re_, ts, te) in SESSIONS.items():
+        for stop in (1.0, 1.5):
+            for rr in (2.0, 5.0, 12.0):
+                params = {
+                    "range_start_hour": float(rs),
+                    "range_end_hour": float(re_),
+                    "trade_start_hour": float(ts),
+                    "trade_end_hour": float(te),
+                    "stop_atr": stop,
+                    "target_atr": round(stop * rr, 2),
+                }
+                out.append(("breakout_session", f"sess_{name}_s{stop}_r{rr}", params))
+    return out
+
+
+FAMILIES: dict[str, Callable[[], list[Candidate]]] = {
+    "trend": _trend_grid,
+    "range": _range_grid,
+    "channel": _channel_grid,
+    "session": _session_grid,
+}
+
+
+def grid(families: tuple[str, ...] = ("trend",)) -> list[Candidate]:
+    """The fixed candidates of the named families (D-059 trend; D-063 range, channel, session)."""
+    out: list[Candidate] = []
+    for f in families:
+        if f not in FAMILIES:
+            raise ValueError(f"unknown family {f!r}; choose from {', '.join(FAMILIES)}")
+        out += FAMILIES[f]()
     return out
 
 
@@ -78,13 +151,27 @@ def effective(c: Candidate, cfg: Config) -> Candidate:
 
 def describe(c: Candidate) -> str:
     kind, sid, p = c
-    if kind != "trend_htf":
-        return f"{sid} (current live strategy, 1-minute bars)"
-    how = "EMA cross" if p.get("on_cross") else "trend state"
-    return (
-        f"{int(p['minutes'])}-minute bars, {how}, stop {p['stop_atr']} x 1-minute ATR, "
-        f"target {p['target_atr']} x 1-minute ATR"
-    )
+    ends = f"stop {p.get('stop_atr')} x 1-minute ATR, target {p.get('target_atr')} x 1-minute ATR"
+    if kind == "trend_htf":
+        how = "EMA cross" if p.get("on_cross") else "trend state"
+        return f"{int(p['minutes'])}-minute bars, {how}, {ends}"
+    if kind == "range_fade" and "minutes" in p:
+        return (
+            f"Range reversal on {int(p['minutes'])}-minute bars, fade beyond {p['z_entry']} "
+            f"standard deviations, {ends}"
+        )
+    if kind == "channel_break" and "minutes" in p:
+        return (
+            f"Channel breakout on {int(p['minutes'])}-minute bars, beyond the last "
+            f"{int(p['lookback'])} bars, {ends}"
+        )
+    if kind == "breakout_session" and "range_start_hour" in p:
+        return (
+            f"Session breakout of the {int(p['range_start_hour']):02d}-"
+            f"{int(p['range_end_hour']):02d} UTC range, traded {int(p['trade_start_hour']):02d}-"
+            f"{int(p['trade_end_hour']):02d} UTC, {ends}"
+        )
+    return f"{sid} (current live strategy, 1-minute bars)"
 
 
 def unique(cands: list[Candidate], cfg: Config) -> list[Candidate]:

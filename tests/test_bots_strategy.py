@@ -30,7 +30,7 @@ def test_messages_carry_every_input_and_only_recent_news():
             {"created_ms": NOW - 9 * HOUR, "summary": "stale item", "event_type": "fed"},
         ],
         recent_trades=[{"trade_id": f"t{i}", "net_pnl": -1.0} for i in range(12)],
-        lessons=[f"lesson {i}" for i in range(7)],
+        lessons=[f"lesson {i}" for i in range(10)],
         open_position={"ticket": 1, "side": "long", "profit": 3.2},
         next_event="FOMC",
         minutes_to_event=95,
@@ -39,7 +39,7 @@ def test_messages_carry_every_input_and_only_recent_news():
     assert "Deterministic signal: long" in text and "Risk budget (code-decided, 0–100): 80" in text
     assert "CPI hot" in text and "stale item" not in text
     assert "t9" in text and "t10" not in text  # last 10 trades
-    assert "lesson 4" in text and "lesson 5" not in text  # latest 5 lessons
+    assert "lesson 7" in text and "lesson 8" not in text  # playbook and lessons: up to 8 (D-064)
     assert "ticket=1" in text and "FOMC in 95 min" in text
     assert "stated 0.72" in text and "stop_atr bounds [0.30, 1.50]" in text
     assert len(recent_news(c.news_events, NOW)) == 1

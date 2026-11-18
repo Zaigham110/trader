@@ -171,6 +171,85 @@ class TrendHTF:
         return SignalFrame(side, self.stop_atr, self.target_atr)
 
 
+def _group_closes(df: pd.DataFrame, minutes: int) -> tuple[np.ndarray, np.ndarray]:
+    """Index of the 1-minute bar that completes each `minutes`-long group, and the mid close there.
+    The final group counts only if it is complete, so nothing looks ahead."""
+    span = int(minutes) * 60
+    t = df["time"].to_numpy(dtype=np.int64)
+    mid = (df["bid_close"].to_numpy(dtype=float) + df["ask_close"].to_numpy(dtype=float)) / 2.0
+    if len(t) < 2 or span < 60:
+        return np.zeros(0, dtype=np.int64), np.zeros(0)
+    bucket = t // span
+    last = np.nonzero(bucket[1:] != bucket[:-1])[0]
+    if (t[-1] + 60) % span == 0:
+        last = np.append(last, len(t) - 1)
+    return last, mid[last]
+
+
+@dataclass(frozen=True)
+class RangeFade:
+    """Range reversal on N-minute bars (D-063 research): fade a stretched close.
+
+    z = (close - mean) / standard deviation of the last `lookback` completed closes. A signal
+    appears on the 1-minute bar that completes a group when z first moves beyond `z_entry`:
+    short above the band, long below it. One signal per excursion.
+    """
+
+    id: str = "range_fade_v1"
+    kind: str = "range_fade"
+    minutes: int = 15
+    lookback: int = 20
+    z_entry: float = 2.0
+    stop_atr: float = 1.5
+    target_atr: float = 3.0
+
+    def signals(self, df: pd.DataFrame) -> SignalFrame:
+        side = np.zeros(len(df), dtype=np.int8)
+        last, close = _group_closes(df, self.minutes)
+        if len(last) <= self.lookback:
+            return SignalFrame(side, self.stop_atr, self.target_atr)
+        c = pd.Series(close)
+        mean = c.rolling(self.lookback, min_periods=self.lookback).mean()
+        sd = c.rolling(self.lookback, min_periods=self.lookback).std(ddof=1)
+        z = np.nan_to_num(((c - mean) / sd.where(sd > 0)).to_numpy(), nan=0.0)
+        state = np.where(z >= self.z_entry, -1, np.where(z <= -self.z_entry, 1, 0)).astype(np.int8)
+        prev = np.roll(state, 1)
+        prev[0] = 0
+        new = (state != 0) & (state != prev)
+        side[last[new]] = state[new]
+        return SignalFrame(side, self.stop_atr, self.target_atr)
+
+
+@dataclass(frozen=True)
+class ChannelBreak:
+    """Channel breakout on N-minute bars (D-063 research): a completed close beyond the highest
+    or lowest close of the previous `lookback` completed bars, in the direction of the break.
+    One signal per break."""
+
+    id: str = "channel_break_v1"
+    kind: str = "channel_break"
+    minutes: int = 15
+    lookback: int = 20
+    stop_atr: float = 1.5
+    target_atr: float = 6.0
+
+    def signals(self, df: pd.DataFrame) -> SignalFrame:
+        side = np.zeros(len(df), dtype=np.int8)
+        last, close = _group_closes(df, self.minutes)
+        if len(last) <= self.lookback:
+            return SignalFrame(side, self.stop_atr, self.target_atr)
+        c = pd.Series(close)
+        hi = c.rolling(self.lookback, min_periods=self.lookback).max().shift(1).to_numpy()
+        lo = c.rolling(self.lookback, min_periods=self.lookback).min().shift(1).to_numpy()
+        with np.errstate(invalid="ignore"):
+            state = np.where(close > hi, 1, np.where(close < lo, -1, 0)).astype(np.int8)
+        prev = np.roll(state, 1)
+        prev[0] = 0
+        new = (state != 0) & (state != prev)
+        side[last[new]] = state[new]
+        return SignalFrame(side, self.stop_atr, self.target_atr)
+
+
 def build_strategy(kind: str, strategy_id: str, params: dict[str, float]) -> Strategy:
     """Factory from config (StrategyConfig.kind/params). Unknown kinds raise."""
     if kind == "trend_htf":
@@ -182,6 +261,23 @@ def build_strategy(kind: str, strategy_id: str, params: dict[str, float]) -> Str
             stop_atr=float(params.get("stop_atr", 4.0)),
             target_atr=float(params.get("target_atr", 8.0)),
             on_cross=bool(params.get("on_cross", 1.0)),
+        )
+    if kind == "range_fade":
+        return RangeFade(
+            id=strategy_id,
+            minutes=int(params.get("minutes", 15)),
+            lookback=int(params.get("lookback", 20)),
+            z_entry=float(params.get("z_entry", 2.0)),
+            stop_atr=float(params.get("stop_atr", 1.5)),
+            target_atr=float(params.get("target_atr", 3.0)),
+        )
+    if kind == "channel_break":
+        return ChannelBreak(
+            id=strategy_id,
+            minutes=int(params.get("minutes", 15)),
+            lookback=int(params.get("lookback", 20)),
+            stop_atr=float(params.get("stop_atr", 1.5)),
+            target_atr=float(params.get("target_atr", 6.0)),
         )
     if kind == "flat":
         return FlatStrategy(id=strategy_id)
