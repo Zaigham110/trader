@@ -9,7 +9,6 @@ from pathlib import Path
 
 import pytest
 
-from goldtrader.backtest import search as ss
 from goldtrader.bots import nightly as nb
 from goldtrader.bots.common import BotContext
 from goldtrader.bots.strategy import build_strategy_messages
@@ -166,7 +165,21 @@ def history(tmp_path_factory):
     return conn, cfg, _default_spec(cfg.account.symbol), now_ms
 
 
-def test_nightly_runs_once_per_trading_day_and_survives_a_failing_step(history, monkeypatch):
+def _fake_eval(good_kind="channel_break", held_pct=0.8):
+    """A stand-in for the backtester: one kind is steadily profitable on every slice."""
+    calls = {"n": 0}
+
+    def evaluate(df, c, spread_mult=1.0):
+        calls["n"] += 1
+        if c[0] == good_kind:
+            pct = held_pct if len(df) > 4000 else 0.5  # the blind third is the long slice
+            return {"n_trades": 12, "net_return_pct": pct, "net_pnl": pct * 50}
+        return {"n_trades": 12, "net_return_pct": -0.4, "net_pnl": -20.0}
+
+    return evaluate, calls
+
+
+def test_nightly_runs_once_per_trading_day_and_survives_a_failing_step(history):
     conn, cfg, spec, now = history
     strat = cfg.strategies[0]
     night = loop.night_of(now)
@@ -186,75 +199,86 @@ def test_nightly_runs_once_per_trading_day_and_survives_a_failing_step(history, 
         {"kind": "grid", "stop_atr": 1, "target_atr": 2, "rationale": "not in the library"},
         {"kind": "trend_htf", "minutes": 5, "stop_atr": 1, "target_atr": 2, "rationale": "a fourth"},
     ]  # fmt: skip
+    evaluate, calls = _fake_eval(good_kind="none")
     out = loop.nightly(
-        conn, cfg, strat, spec, now, review_fn=review, ideas_fn=lambda ev, tried: ideas
-    )
+        conn, cfg, strat, spec, now, review_fn=review, ideas_fn=lambda ev, tried: ideas,
+        evaluate=evaluate,
+    )  # fmt: skip
     assert out["review"] == {"lessons": 1} and out["evidence_groups"]["live_rule_signals"] > 8
-    tested = out["research"]["tested"]
-    statuses = [t["status"].split(":")[0] for t in tested]
-    assert statuses[:2] == ["already tested", "invalid"]  # the clamped twin and the unknown kind
-    assert len(tested) == loop.MAX_IDEAS_PER_NIGHT  # the fourth idea is never tested
-    assert statuses[2] in ("holds", "fails", "too_few_trades")
-    assert conn.execute("SELECT COUNT(*) FROM strategy_ideas").fetchone()[0] == 1
-    assert (
-        "channel_break" in json.dumps(seen["ev"]) or seen["ev"]["live_rule"]["kind"] == "trend_atr"
-    )
+    r = out["research"]
+    assert r["trials"] == 24 and r["from_research_agent"] == 1  # the fourth idea is never tried
+    assert [x["why"] for x in r["refused"]] == ["already tested", "kind not in the rule library"]
+    assert r["best"] is None and r["to_paper"] == [] and r["profitable_across_folds"] == 0
+    assert calls["n"] == 24 * 4  # four folds per trial; the blind period was never touched
+    rows = conn.execute("SELECT status, rationale, in_sample_json FROM strategy_ideas").fetchall()
+    assert len(rows) == 24 and {x["status"] for x in rows} == {"searched"}
+    assert sum(1 for x in rows if x["rationale"] == "Breakouts held on slower bars.") == 1
+    assert len(json.loads(rows[0]["in_sample_json"])["fold_returns"]) == 4
     run = conn.execute("SELECT * FROM learning_runs WHERE night=?", (night,)).fetchone()
     assert run["status"] == "done" and json.loads(run["summary_json"])["night"] == night
     assert loop.nightly_due(conn, now) is None  # not twice for the same trading day
     assert loop.nightly_due(conn, now + 86_400_000) == loop.night_of(now + 86_400_000)
-    assert loop.tried_ideas(conn)[0]["kind"] == "channel_break"
-    # next night: the same idea is refused, a broken review is recorded and research still runs
+    assert len(loop.search_history(conn)) == 24 and len(loop.tried_ideas(conn)) == 24
+    # next night: nothing is tested twice, a broken review is recorded and the search still runs
     later = now + 86_400_000
 
     def boom(ev, book):
         raise RuntimeError("model down")
 
     out2 = loop.nightly(
-        conn, cfg, strat, spec, later, review_fn=boom, ideas_fn=lambda e, t: ideas[:1]
+        conn, cfg, strat, spec, later, review_fn=boom, ideas_fn=boom, evaluate=evaluate
     )
     assert out2["review"].startswith("error: RuntimeError")
-    assert out2["research"]["tested"][0]["status"] == "already tested"
+    assert out2["research"]["trials"] == 24 and "research agent failed" in out2["research"]["note"]
+    assert conn.execute("SELECT COUNT(DISTINCT key) FROM strategy_ideas").fetchone()[0] == 48
     assert conn.execute(
         "SELECT status FROM learning_runs WHERE night=?", (loop.night_of(later),)
     ).fetchone()[0] == "failed"  # fmt: skip
     assert len(loop.active_playbook(conn)) == 1  # the old playbook is kept when the review fails
-    # a review that returns nothing keeps the playbook too; without a model both steps are skipped
-    out3 = loop.nightly(conn, cfg, strat, spec, later + 86_400_000, review_fn=lambda e, b: None)
-    assert out3["review"].startswith("kept") and out3["research"] == "skipped: no model"
+    # without any model the review is skipped and the code search still runs
+    out3 = loop.nightly(conn, cfg, strat, spec, later + 86_400_000, evaluate=evaluate)
+    assert out3["review"] == "skipped: no model" and out3["research"]["trials"] == 24
     st = loop.status(conn, later)
     assert (
-        st["ideas_total"] == 1 and st["last_run"]["status"] == "done" and len(st["playbook"]) == 1
+        st["ideas_total"] == 72 and st["last_run"]["status"] == "done" and len(st["playbook"]) == 1
     )
+    assert len(st["ideas"]) == 12
 
 
-def test_an_idea_that_holds_goes_to_paper_and_never_further(history, monkeypatch):
+def test_the_single_best_trial_is_blind_tested_and_only_then_paper_traded(history):
     conn, cfg, spec, now = history
-    idea = {"kind": "trend_htf", "minutes": 30, "on_cross": True, "stop_atr": 1.5, "target_atr": 9,
-            "rationale": "Slower trend bars held before."}  # fmt: skip
-
-    def fake_search(conn, cfg, spec, *, candidates, frame=None, **kw):
-        c = candidates[0]
-        m = {"n_trades": 40, "net_return_pct": 1.2, "net_pnl": 60.0}
-        return {
-            "all": [{"id": "base", "what": "b", "in_sample": m}, {"id": c[1], "what": ss.describe(c), "in_sample": m}],
-            "finalists": [{"candidate": c, "holds": True, "held_out": m}],
-        }  # fmt: skip
-
-    monkeypatch.setattr(ss, "run_search", fake_search)
-    tested = loop.try_ideas(conn, cfg, spec, [idea], "n", now, frame=object())
-    assert tested[0]["status"] == "holds"
-    added = loop.auto_paper(conn, tested, now)
+    frame = __import__("goldtrader.backtest.timemachine", fromlist=["load_frame"]).load_frame(
+        conn, cfg
+    )
+    conn.execute("DELETE FROM strategy_ideas")
+    conn.execute("DELETE FROM paper_candidates")
+    evaluate, calls = _fake_eval()
+    out = loop.search_ideas(conn, cfg, spec, [], "n1", now, frame, evaluate=evaluate, trials=12)
+    assert out["best"]["holds"] is True and out["profitable_across_folds"] >= 1
+    assert out["pbo"] is not None and out["pbo"] <= 0.5 and "blind" in out["verdict"]
+    assert calls["n"] == 12 * 4 + 2  # folds for every trial, the blind period twice for one
+    holds = [t for t in out["tested"] if t["status"] == "holds"]
+    assert len(holds) == 1 and holds[0]["kind"] == "channel_break"
+    added = loop.auto_paper(conn, out["tested"], now)
     row = conn.execute("SELECT * FROM paper_candidates WHERE bundle_id=?", (added[0],)).fetchone()
-    assert added[0].startswith("auto_") and row["active"] == 1 and row["kind"] == "trend_htf"
-    assert json.loads(row["params_json"])["minutes"] == 30.0
-    idea_row = conn.execute("SELECT status, paper_bundle_id FROM strategy_ideas WHERE kind='trend_htf'").fetchone()  # fmt: skip
-    assert tuple(idea_row) == ("holds", added[0])
+    assert added[0].startswith("auto_") and row["active"] == 1 and row["kind"] == "channel_break"
+    idea_row = conn.execute("SELECT status, paper_bundle_id, held_out_json FROM strategy_ideas WHERE status='holds'").fetchone()  # fmt: skip
+    assert (
+        idea_row["paper_bundle_id"] == added[0]
+        and json.loads(idea_row["held_out_json"])["n_trades"] == 12
+    )
+    # a best trial that loses on the blind period is recorded as failed and not paper-traded
+    conn.execute("DELETE FROM paper_candidates")
+    bad_eval, _ = _fake_eval(good_kind="range_fade", held_pct=-0.3)
+    out2 = loop.search_ideas(conn, cfg, spec, [], "n2", now, frame, evaluate=bad_eval, trials=12)
+    assert out2["best"]["holds"] is False and loop.auto_paper(conn, out2["tested"], now) == []
+    assert [t["status"] for t in out2["tested"]].count("fails") == 1
     # the number of paper candidates is capped
     for i in range(loop.MAX_ACTIVE_PAPER):
         conn.execute("INSERT INTO paper_candidates VALUES (?,?,?,?,?,1)", (f"x{i}", "flat", "{}", "x", 1))  # fmt: skip
-    again = [{**tested[0], "key": "k2", "c": ("trend_htf", "idea_zz", {"minutes": 60.0})}]
+    again = [{**holds[0], "key": "k2", "c": ("trend_htf", "idea_zz", {"minutes": 60.0})}]
     assert loop.auto_paper(conn, again, now) == []
+    assert loop.idea_from_params("breakout_session", {"range_start_hour": 7.0, "stop_atr": 1.0, "target_atr": 3.0})["session"] == "london"  # fmt: skip
 
 
 def test_paper_candidates_are_judged_at_100_trades_and_only_the_owner_promotes():

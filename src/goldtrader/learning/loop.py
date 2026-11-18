@@ -11,9 +11,10 @@ half of that, with no model call in it:
     the Telegram channels. Groups with fewer than `MIN_GROUP` cases are left out, so a lesson can
     never rest on a handful of trades;
   * `replace_playbook` / `active_playbook` hold the lessons the Strategy agent reads;
-  * `validate_idea` / `try_ideas` take the research agent's strategy ideas, refuse anything
-    outside the rule library or the owner's limits, and test the rest with the held-out search
-    (`backtest.search`). An idea that holds goes to paper trading, never to the account;
+  * `validate_idea` / `search_ideas` take the research agent's strategy ideas and the
+    optimiser's own trials (`backtest.optimise`), refuse anything outside the rule library or the
+    owner's limits, score the rest on walk-forward folds and test the single best once on the
+    blind period. An idea that holds goes to paper trading, never to the account;
   * `review_paper` tells the owner when a paper candidate has enough trades to judge, and retires
     the ones that lost;
   * `nightly` runs the whole thing once per trading day. The two model calls are injected.
@@ -443,15 +444,56 @@ def validate_idea(idea: dict[str, Any], cfg: Config) -> tuple[tuple[str, str, di
     return ss.effective((kind, name, p), cfg), ""
 
 
-def tried_ideas(conn: sqlite3.Connection, limit: int = 60) -> list[dict[str, Any]]:
+def idea_from_params(kind: str, p: dict[str, Any]) -> dict[str, Any]:
+    """Stored effective parameters back into the idea shape the optimiser samples."""
+    idea: dict[str, Any] = {
+        "kind": kind,
+        "stop_atr": p.get("stop_atr"),
+        "target_atr": p.get("target_atr"),
+    }
+    if kind == "breakout_session":
+        idea["session"] = "asia" if int(p.get("range_start_hour", 0)) == 0 else "london"
+        return idea
+    idea["minutes"] = int(p.get("minutes", 0))
+    if kind == "trend_htf":
+        idea["on_cross"] = bool(p.get("on_cross"))
+    else:
+        idea["lookback"] = int(p.get("lookback", 20))
+    if kind == "range_fade":
+        idea["z_entry"] = p.get("z_entry")
+    return idea
+
+
+def search_history(
+    conn: sqlite3.Connection, limit: int = 400
+) -> list[tuple[dict[str, Any], float]]:
+    """(idea, fold score) of earlier optimiser trials: what the sampler learns from across nights."""
     if not _table(conn, "strategy_ideas"):
         return []
     out = []
     for r in conn.execute(
-        "SELECT kind, params_json, status, in_sample_json, held_out_json FROM strategy_ideas "
-        "ORDER BY id DESC LIMIT ?",
+        "SELECT kind, params_json, in_sample_json FROM strategy_ideas ORDER BY id DESC LIMIT ?",
         (limit,),
     ):
+        score = json.loads(r["in_sample_json"] or "{}").get("score")
+        if score is not None:
+            out.append((idea_from_params(r["kind"], json.loads(r["params_json"])), float(score)))
+    return out
+
+
+def tried_ideas(conn: sqlite3.Connection, limit: int = 40) -> list[dict[str, Any]]:
+    """What the research agent is shown: the candidates that reached the blind test, then the
+    best-scoring of the rest, so it sees what the search has already covered."""
+    if not _table(conn, "strategy_ideas"):
+        return []
+    rows = conn.execute(
+        "SELECT kind, params_json, status, in_sample_json, held_out_json FROM strategy_ideas "
+        "ORDER BY (status IN ('holds','fails','overfit')) DESC, "
+        "COALESCE(json_extract(in_sample_json, '$.score'), -1e9) DESC, id DESC LIMIT ?",
+        (limit,),
+    ).fetchall()
+    out = []
+    for r in rows:
         ins, held = json.loads(r["in_sample_json"] or "{}"), json.loads(r["held_out_json"] or "{}")
         out.append(
             {
@@ -459,57 +501,71 @@ def tried_ideas(conn: sqlite3.Connection, limit: int = 60) -> list[dict[str, Any
                 **json.loads(r["params_json"]),
                 "result": r["status"],
                 "in_sample_pct": ins.get("net_return_pct"),
+                "fold_score": ins.get("score"),
                 "held_out_pct": held.get("net_return_pct"),
             }
         )
     return out
 
 
-def try_ideas(
+def search_ideas(
     conn: sqlite3.Connection,
     cfg: Config,
     spec: Any,
     ideas: list[dict[str, Any]],
     night: str,
     now_ms: int,
-    frame: Any = None,
-) -> list[dict[str, Any]]:
-    """Validate, de-duplicate and test tonight's ideas; record every one. Returns the rows."""
+    frame: Any,
+    *,
+    evaluate: Any = None,
+    trials: int | None = None,
+) -> dict[str, Any]:
+    """Tonight's strategy search (D-069): the research agent's ideas first, then the optimiser's
+    own trials, all scored on walk-forward folds; the single best is tested once on the blind
+    period. Every trial is recorded. Returns a summary plus `tested` rows for `auto_paper`."""
+    from goldtrader.backtest import optimise as opt
     from goldtrader.backtest import search as ss
+    from goldtrader.backtest.timemachine import _events
 
-    out: list[dict[str, Any]] = []
-    cands: list[tuple[str, str, dict]] = []
-    why: dict[str, str] = {}
+    if evaluate is None:
+        t0, t1 = int(frame["time"].iloc[0]), int(frame["time"].iloc[-1])
+        events = _events(conn, t0, t1)
+
+        def evaluate(df: Any, c: Any, spread_mult: float = 1.0) -> dict[str, Any]:
+            return ss.evaluate(df, c, cfg, spec, events, spread_mult=spread_mult)
+
+    why = {}
     for idea in ideas[:MAX_IDEAS_PER_NIGHT]:
-        c, reason = validate_idea(idea, cfg)
-        rationale = " ".join(str(idea.get("rationale", "")).split())[:300]
-        if c is None:
-            out.append({"kind": str(idea.get("kind"))[:30], "status": f"invalid: {reason}"})
-            continue
-        key = idea_key(c[0], c[2])
-        if (
-            key in why
-            or conn.execute("SELECT 1 FROM strategy_ideas WHERE key=?", (key,)).fetchone()
-        ):
-            out.append({"kind": c[0], "what": ss.describe(c), "status": "already tested"})
-            continue
-        why[key] = rationale
-        cands.append(c)
-    if not cands:
-        return out
-    res = ss.run_search(conn, cfg, spec, candidates=cands, frame=frame)
-    finalists = {r["candidate"][1]: r for r in res["finalists"]}
-    for row in res["all"][1:]:
-        c = next(x for x in cands if x[1] == row["id"])
-        f = finalists.get(c[1])
-        ins = row["in_sample"]
-        if f is not None:
-            status = "holds" if f["holds"] else "fails"
-        elif (ins.get("n_trades") or 0) < ss.MIN_TRADES_IN_SAMPLE:
+        c, _ = validate_idea(idea, cfg)
+        if c is not None:
+            why.setdefault(
+                idea_key(c[0], c[2]), " ".join(str(idea.get("rationale", "")).split())[:300]
+            )
+    known = {r[0] for r in conn.execute("SELECT key FROM strategy_ideas")}
+    res = opt.run(
+        frame,
+        seed=int(hashlib.sha256(night.encode()).hexdigest()[:8], 16),
+        validate=lambda idea: validate_idea(idea, cfg),
+        key_of=lambda c: idea_key(c[0], c[2]),
+        evaluate=evaluate,
+        skip_keys=known,
+        history=search_history(conn),
+        seeds=ideas[:MAX_IDEAS_PER_NIGHT],
+        trials=trials or opt.TRIALS,
+    )
+    best = res["best"]
+    tested: list[dict[str, Any]] = []
+    for t in res["trials"]:
+        c = t["candidate"]
+        if best is not None and t is best:
+            status = (
+                "holds" if best.get("holds") else ("fails" if best.get("held_out") else "overfit")
+            )
+        elif t["n_trades"] < opt.MIN_TRADES:
             status = "too_few_trades"
         else:
-            status = "fails"
-        key = idea_key(c[0], c[2])
+            status = "searched"
+        what = ss.describe(c)
         conn.execute(
             "INSERT OR IGNORE INTO strategy_ideas(night, created_ms, kind, params_json, key, what, "
             "rationale, status, in_sample_json, held_out_json) VALUES (?,?,?,?,?,?,?,?,?,?)",
@@ -518,16 +574,43 @@ def try_ideas(
                 now_ms,
                 c[0],
                 json.dumps(c[2], sort_keys=True),
-                key,
-                row["what"],
-                why[key],
+                t["key"],
+                what,
+                why.get(t["key"], "optimiser trial"),
                 status,
-                json.dumps(ins),
-                json.dumps(f["held_out"]) if f is not None else None,
+                json.dumps(
+                    {
+                        "n_trades": t["n_trades"],
+                        "net_return_pct": t["net_return_pct"],
+                        "fold_returns": t["fold_returns"],
+                        "fold_trades": t["fold_trades"],
+                        "score": t["score"],
+                    }
+                ),
+                json.dumps(best.get("held_out")) if t is best and best.get("held_out") else None,
             ),
         )
-        out.append({"kind": c[0], "what": row["what"], "status": status, "key": key, "c": c})
-    return out
+        tested.append({"kind": c[0], "what": what, "status": status, "key": t["key"], "c": c})
+    return {
+        "trials": len(res["trials"]),
+        "from_research_agent": sum(1 for t in res["trials"] if t["seeded"]),
+        "refused": res["refused"],
+        "profitable_across_folds": res["eligible"],
+        "pbo": res["pbo"],
+        "verdict": res["verdict"],
+        "best": (
+            {
+                "what": ss.describe(best["candidate"]),
+                "score": best["score"],
+                "fold_returns": best["fold_returns"],
+                "held_out_pct": (best.get("held_out") or {}).get("net_return_pct"),
+                "holds": bool(best.get("holds")),
+            }
+            if best is not None
+            else None
+        ),
+        "tested": tested,
+    }
 
 
 def auto_paper(conn: sqlite3.Connection, tested: list[dict[str, Any]], now_ms: int) -> list[str]:
@@ -641,6 +724,7 @@ def nightly(
     ideas_fn: IdeasFn | None = None,
     frame: Any = None,
     night: str | None = None,
+    evaluate: Any = None,
 ) -> dict[str, Any]:
     """One learning pass. Each step is isolated: a failure is recorded and the rest still runs."""
     night = night or night_of(now_ms)
@@ -682,16 +766,20 @@ def nightly(
         return {"lessons": replace_playbook(conn, night, items, now_ms)}
 
     def research() -> Any:
-        if ideas_fn is None:
-            return "skipped: no model"
         if frame is None:
             return "skipped: no history"
-        tested = try_ideas(conn, cfg, spec, ideas_fn(ev, tried_ideas(conn)), night, now_ms, frame)
-        added = auto_paper(conn, tested, now_ms)
-        return {
-            "tested": [{k: t.get(k) for k in ("kind", "what", "status")} for t in tested],
-            "to_paper": added,
-        }
+        ideas: list[dict[str, Any]] = []
+        note = None
+        if ideas_fn is not None:
+            try:
+                ideas = list(ideas_fn(ev, tried_ideas(conn)) or [])
+            except Exception as e:  # noqa: BLE001 - the code search does not depend on the model
+                note = f"research agent failed: {type(e).__name__}"
+        out = search_ideas(conn, cfg, spec, ideas, night, now_ms, frame, evaluate=evaluate)
+        out["to_paper"] = auto_paper(conn, out.pop("tested"), now_ms)
+        if note:
+            out["note"] = note
+        return out
 
     step("review", review)
     step("research", research)
@@ -714,8 +802,10 @@ def status(conn: sqlite3.Connection, now_ms: int) -> dict[str, Any]:
     ideas = [
         dict(r)
         for r in conn.execute(
-            "SELECT night, what, status, paper_bundle_id FROM strategy_ideas ORDER BY id DESC "
-            "LIMIT 12"
+            "SELECT night, what, status, paper_bundle_id, "
+            "json_extract(in_sample_json, '$.score') AS score FROM strategy_ideas "
+            "ORDER BY night DESC, (status IN ('holds','fails','overfit')) DESC, "
+            "COALESCE(json_extract(in_sample_json, '$.score'), -1e9) DESC LIMIT 12"
         )
     ]
     return {

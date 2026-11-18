@@ -302,7 +302,7 @@ footer{color:var(--dim);font-size:12px;padding:6px 2px 20px}
   <section class="grid">
     <div class="card">
       <h2>What the agents have learned</h2>
-      <div class="tm-note">Every time the rule wants a trade, the decision is graded against what the price then did. Once per trading day a review agent rewrites the playbook below from those measured numbers, and a research agent proposes strategy ideas that code tests on history; ideas that pass go to the paper test, never straight to the account. R means multiples of the amount risked.</div>
+      <div class="tm-note">Every time the rule wants a trade, the decision is graded against what the price then did. Once per trading day a review agent rewrites the playbook below from those measured numbers, and a strategy search tries about 24 rule variants (a few proposed by a research agent, the rest by an optimiser), scores each on four separate stretches of history and blind-tests only the best one; a variant that passes goes to the paper test, never straight to the account. R means multiples of the amount risked.</div>
       <div id="learnHead" style="font-size:13px;margin-bottom:6px"></div>
       <div class="tm-cards" id="learnCards"></div>
       <div id="learnRecord" class="dim" style="font-size:13px;margin:8px 0"></div>
@@ -621,7 +621,7 @@ function renderLearning(s) {
     book.appendChild(t); }
   if (!v.ideas.length) { ideas.appendChild(el("div", "empty", "No strategy idea has been tested yet.")); return; }
   const t2 = el("table"), h2 = el("tr"); for (const k of ["Night", "Idea", "Result"]) h2.appendChild(el("th", null, k)); t2.appendChild(h2);
-  const words = {holds: "passed, now on paper", fails: "failed", too_few_trades: "too few trades to judge"};
+  const words = {holds: "best of its night, passed the blind test: on paper", fails: "best of its night, failed the blind test", overfit: "best of its night, not blind-tested: the search looked overfitted", searched: "tried, not the best of its night", too_few_trades: "too few trades to judge"};
   for (const i of v.ideas) { const r = el("tr"); r.appendChild(el("td", "num dim", i.night)); r.appendChild(el("td", null, i.what));
     r.appendChild(el("td", i.status === "holds" ? "up" : "dim", words[i.status] || i.status)); t2.appendChild(r); }
   ideas.appendChild(t2);
