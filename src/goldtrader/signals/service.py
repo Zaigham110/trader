@@ -20,6 +20,7 @@ log = logging.getLogger(__name__)
 
 MAX_TEXT = 4000
 LATE_S = 300  # a message first seen this long after it was posted is not scored
+HOLE_S = 2 * 3600  # a gap this long between stored bars, outside the weekend, is missing data
 MAX_ALERTS_PER_HOUR = 8
 AiFn = Callable[[str], tuple[Any, float]]
 """text -> (model output dict or None, cost in USD). Raises on failure."""
@@ -89,14 +90,18 @@ class SignalService:
             (state, cost, chat_id, msg_id),
         )
         if parsed is not None:
-            late = edited or (now - posted_ms) > LATE_S * 1000
+            late = (now - posted_ms) > LATE_S * 1000
+            # Already edited when first seen (channels often fix a post within seconds): the
+            # original wording is unknown, so it is judged from the moment we read it, never
+            # from the time it claims to have been posted.
+            start_ms = now if edited else posted_ms
             self.c.execute(
                 "INSERT OR IGNORE INTO signals(channel_id, msg_id, posted_ms, side, entry_lo, "
                 "entry_hi, stop, targets_json, parser, status) VALUES (?,?,?,?,?,?,?,?,?,?)",
                 (
                     chat_id,
                     msg_id,
-                    posted_ms,
+                    start_ms,
                     parsed.side,
                     parsed.entry_lo,
                     parsed.entry_hi,
@@ -210,8 +215,20 @@ class SignalService:
         now_s = self.clock_ms() // 1000
         start_s = int(rows[0][1]) // 1000 - 60
         bars = Repo(self.c).load_bars(self.symbol, 60, start_s, now_s + 60)
+        holes = _holes(bars)
         changed = 0
         for r in rows:
+            posted_s = int(r[1]) // 1000
+            if any(end > posted_s for _start, end in holes):
+                # prices are missing after this signal (our feed was down): judging it now
+                # could turn a loss into "never filled". Wait for the bars to be refilled.
+                if now_s - posted_s > S.ENTRY_EXPIRY_S + 4 * 86400:
+                    self.c.execute(
+                        "UPDATE signals SET status='expired', exit_why='price_gap' WHERE id=?",
+                        (r[0],),
+                    )
+                    changed += 1
+                continue
             sig = {
                 "posted_ms": r[1],
                 "side": r[2],
@@ -227,6 +244,22 @@ class SignalService:
             self.c.execute(f"UPDATE signals SET {cols} WHERE id=?", (*upd.values(), r[0]))  # noqa: S608
             changed += 1
         return changed
+
+
+def _holes(bars: list[Any]) -> list[tuple[int, int]]:
+    """(start, end) of gaps in the stored 1-minute bars that are too long to be the daily
+    break and do not begin at the weekend close: time when our own feed was not recording."""
+    from datetime import UTC, datetime
+
+    out: list[tuple[int, int]] = []
+    for a, b in zip(bars, bars[1:], strict=False):
+        if b.time - a.time <= HOLE_S:
+            continue
+        d = datetime.fromtimestamp(a.time, UTC)
+        if d.weekday() in (5, 6) or (d.weekday() == 4 and d.hour >= 20):
+            continue  # the weekend
+        out.append((a.time, b.time))
+    return out
 
 
 def make_ai(provider: Any) -> AiFn:

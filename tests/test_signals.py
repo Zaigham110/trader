@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from goldtrader.dashboard import data
-from goldtrader.db import connect, migrate
+from goldtrader.db import Repo, connect, migrate
 from goldtrader.signals import parse as P
 from goldtrader.signals import score as S
 from goldtrader.signals.report import scorecard
@@ -213,10 +213,12 @@ def test_late_and_already_edited_messages_are_kept_but_not_scored():
     svc.on_message(CH, 1, (T0 - 3600) * 1000, text)  # caught up an hour later
     svc.on_message(CH, 2, T0 * 1000, text, edited=True)
     svc.on_edit(CH, 3, text, T0 * 1000)  # first seen as an edit
-    assert [r[0] for r in conn.execute("SELECT status FROM signals ORDER BY msg_id")] == [
-        "late"
-    ] * 3
-    assert svc.score() == 0
+    svc.on_message(CH, 4, (T0 - 3600) * 1000, text, edited=True)  # old and edited
+    rows = conn.execute("SELECT status, posted_ms FROM signals ORDER BY msg_id").fetchall()
+    assert [r[0] for r in rows] == ["late", "open", "open", "late"]
+    # already edited when first read: judged from the moment we read it, not its posting time
+    assert rows[1][1] == T0 * 1000 and rows[2][1] == T0 * 1000
+    assert conn.execute("SELECT COUNT(*) FROM alerts").fetchone()[0] == 2  # the two fresh ones
     # a delete without a chat only touches small groups, never a channel
     assert svc.on_delete(None, [1]) == 0
     svc.on_message(-4242, 7, T0 * 1000, "hello")
@@ -336,3 +338,50 @@ def test_dashboard_lists_the_telegram_agent_without_hurting_health():
     )
     later = {a["key"]: a for a in data.agents(conn, clock["ms"] + 3_600_000)}
     assert later["telegram_signals"]["running"] is False and later["health"]["running"] is True
+
+
+def test_signals_are_not_judged_across_a_hole_in_our_own_prices():
+    from goldtrader.signals.service import _holes
+
+    conn, svc, clock = _svc()
+    sym = "XAUUSDm"
+
+    def bar(t, px):
+        conn.execute(
+            "INSERT OR REPLACE INTO bars VALUES (?,60,?,?,?,?,?,?,?,?,?,1,'t')",
+            (sym, t, px, px + 0.3, px - 0.3, px, px + 0.2, px + 0.5, px - 0.1, px + 0.2),
+        )
+
+    for i in range(-10, 0):
+        bar(T0 + 60 * i, 4000.0)
+    # our feed stops; a buy at 4000 with stop 3990 is posted; the price falls to 3980 unseen
+    svc.on_message(CH, 1, T0 * 1000, "XAUUSD BUY 4000 SL 3990 TP 4005")
+    clock["ms"] = (T0 + 5 * 3600) * 1000
+    for i in range(0, 10):
+        bar(T0 + 5 * 3600 + 60 * i, 3980.0)  # the feed is back five hours later
+    assert len(_holes(Repo(conn).load_bars(sym, 60))) == 1
+    assert svc.score() == 0  # not "never filled": it waits for the missing prices
+    assert conn.execute("SELECT status FROM signals").fetchone()[0] == "open"
+    for i in range(0, 300):  # the missing bars are refilled: filled at 4000, then stopped
+        bar(T0 + 60 * i, 4000.0 - min(i, 40) * 0.5)
+    assert svc.score() == 1
+    row = conn.execute("SELECT status, exit_why, r FROM signals").fetchone()
+    assert tuple(row) == ("closed", "stop", -1.0)
+    # a weekend gap is not a hole; a hole that is never refilled ends as price_gap, not as a loss
+    fri = 1_794_000_000 - 1_794_000_000 % 604_800 + 86_400 + 21 * 3600  # a Friday 21:00 UTC
+    assert (
+        _holes([type("B", (), {"time": fri})(), type("B", (), {"time": fri + 49 * 3600})()]) == []
+    )
+    conn2, svc2, clock2 = _svc()
+    for t in (T0 - 60, T0 + 5 * 3600):
+        conn2.execute(
+            "INSERT INTO bars VALUES (?,60,?,?,?,?,?,?,?,?,?,1,'t')",
+            (sym, t, 4000.0, 4000.3, 3999.7, 4000.0, 4000.2, 4000.5, 3999.9, 4000.2),
+        )
+    svc2.on_message(CH, 1, T0 * 1000, "XAUUSD BUY 4000 SL 3990 TP 4005")
+    clock2["ms"] = (T0 + 6 * 86400) * 1000
+    assert svc2.score() == 1
+    assert tuple(conn2.execute("SELECT status, exit_why FROM signals").fetchone()) == (
+        "expired",
+        "price_gap",
+    )
