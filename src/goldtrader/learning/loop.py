@@ -53,7 +53,7 @@ MAX_ACTIVE_PAPER = 8
 PAPER_MIN_TRADES = 100
 SESSIONS = (("asia", 0, 7), ("london", 7, 12), ("new_york", 12, 17), ("late", 17, 24))
 CONF_BANDS = ((0.0, 0.5, "below 0.50"), (0.5, 0.6, "0.50-0.59"), (0.6, 1.01, "0.60 or more"))
-IDEA_KINDS = ("trend_htf", "range_fade", "channel_break", "breakout_session")
+IDEA_KINDS = ("trend_htf", "range_fade", "channel_break", "breakout_session", "pullback_htf")
 IDEA_MINUTES = (5, 15, 30, 60, 120, 240)
 
 ReviewFn = Callable[[dict[str, Any], list[dict[str, Any]]], list[dict[str, Any]] | None]
@@ -427,6 +427,13 @@ def validate_idea(idea: dict[str, Any], cfg: Config) -> tuple[tuple[str, str, di
         p["minutes"] = float(int(minutes))
         if kind == "trend_htf":
             p["on_cross"] = 1.0 if idea.get("on_cross") else 0.0
+        elif kind == "pullback_htf":
+            trend = num("trend_minutes", 60)
+            if trend is None or int(trend) not in (60, 120) or int(trend) <= minutes:
+                return None, "trend_minutes must be 60 or 120 and longer than minutes"
+            if minutes > 30:
+                return None, "pullback minutes must be 5, 15 or 30"
+            p["trend_minutes"] = float(int(trend))
         else:
             lookback = num("lookback", 20)
             if lookback is None or not 5 <= lookback <= 100:
@@ -457,6 +464,8 @@ def idea_from_params(kind: str, p: dict[str, Any]) -> dict[str, Any]:
     idea["minutes"] = int(p.get("minutes", 0))
     if kind == "trend_htf":
         idea["on_cross"] = bool(p.get("on_cross"))
+    elif kind == "pullback_htf":
+        idea["trend_minutes"] = int(p.get("trend_minutes", 60))
     else:
         idea["lookback"] = int(p.get("lookback", 20))
     if kind == "range_fade":

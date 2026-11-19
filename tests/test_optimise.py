@@ -80,7 +80,14 @@ def test_search_scores_on_folds_and_touches_the_blind_period_once():
             "net_pnl": 30 if good else -15,
         }
 
-    res = opt.run(_frame(), seed=1, validate=_validate, key_of=_key, evaluate=evaluate, trials=16)
+    # one known-good candidate is seeded so the test does not depend on the random draw
+    good_seed = [
+        {"kind": "trend_htf", "minutes": 15, "on_cross": False, "stop_atr": 1.5, "target_atr": 9.0}
+    ]
+    res = opt.run(
+        _frame(), seed=1, validate=_validate, key_of=_key, evaluate=evaluate, trials=16,
+        seeds=good_seed,
+    )  # fmt: skip
     assert len(res["trials"]) == 16 and len({t["key"] for t in res["trials"]}) == 16
     assert res["best"]["candidate"][0] == "trend_htf" and res["best"]["holds"] is True
     assert res["pbo"] == 0.0 and res["eligible"] >= 1

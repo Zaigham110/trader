@@ -11,7 +11,13 @@ import pytest
 
 from goldtrader.backtest import search as ss
 from goldtrader.backtest import timemachine as tm
-from goldtrader.backtest.strategies import ChannelBreak, RangeFade, TrendHTF, build_strategy
+from goldtrader.backtest.strategies import (
+    ChannelBreak,
+    PullbackHTF,
+    RangeFade,
+    TrendHTF,
+    build_strategy,
+)
 from goldtrader.cli import _default_spec
 from goldtrader.config import load_config
 from goldtrader.data.synthetic import generate_bars
@@ -160,3 +166,38 @@ def test_wider_families_are_fixed_grids_that_build_and_describe():
         assert c[2]["target_atr"] > c[2]["stop_atr"] <= cfg.owner.risk.stop_atr_max
         assert "current live strategy" not in ss.describe(c)
     assert {c[0] for c in wide} == {"range_fade", "channel_break", "breakout_session"}
+
+
+def test_pullback_enters_only_with_the_higher_trend_after_price_comes_back_and_turns():
+    n = 9000
+    up = 4000 + 0.02 * np.arange(n) + 6 * np.sin(np.arange(n) / 90)  # rising with pullbacks
+    df = _frame(up)
+    s = PullbackHTF(minutes=15, trend_minutes=60)
+    side = s.signals(df).side
+    hits = np.nonzero(side)[0]
+    assert len(hits) >= 3 and set(side[hits]) == {1}  # in an up-trend it only ever buys
+    assert all((df["time"].iloc[i] + 60) % 900 == 0 for i in hits)  # on a completed 15-minute bar
+    cut = int(hits[len(hits) // 2]) + 1  # causal: later bars never change an earlier signal
+    assert np.array_equal(s.signals(df.iloc[:cut]).side, side[:cut])
+    # each buy follows a close at or below the 20-bar average and is itself a close above it
+    last = np.nonzero((df["time"].to_numpy() + 60) % 900 == 0)[0]
+    close = pd.Series(up[last])
+    ema = close.ewm(span=20, adjust=False, min_periods=20).mean()
+    for i in hits:
+        k = int(np.nonzero(last == i)[0][0])
+        assert close[k - 1] <= ema[k - 1] and close[k] > ema[k]
+    down = _frame(4000 - 0.02 * np.arange(n) + 6 * np.sin(np.arange(n) / 90))
+    assert set(np.unique(s.signals(down).side)) == {-1, 0}  # and only sells in a down-trend
+    flat = _frame(4000 + 6 * np.sin(np.arange(n) / 90))
+    assert np.count_nonzero(s.signals(flat).side) < len(hits)  # little to do without a trend
+    assert not s.signals(df.iloc[:600]).side.any()  # too little history: silent
+    assert not PullbackHTF(minutes=60, trend_minutes=60).signals(df).side.any()
+    built = build_strategy("pullback_htf", "x", {"minutes": 5.0, "trend_minutes": 120.0})
+    assert (built.minutes, built.trend_minutes) == (5, 120)
+    cfg = load_config("config/demo.yaml")
+    grid = ss.grid(("pullback",))
+    assert len(grid) == 36 and "Pullback on 5-minute bars with the 60-minute trend" in ss.describe(
+        grid[0]
+    )
+    for c in ss.unique(grid, cfg):
+        build_strategy(*c)

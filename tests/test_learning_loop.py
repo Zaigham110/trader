@@ -133,7 +133,33 @@ def test_ideas_outside_the_rule_library_or_the_owner_limits_are_refused():
         {"kind": "range_fade", "minutes": 60, "z_entry": 2.5, "stop_atr": 1, "target_atr": 2}, cfg
     )
     assert fade[2]["lookback"] == 20.0 and fade[2]["z_entry"] == 2.5
+    pull, _ = loop.validate_idea(
+        {
+            "kind": "pullback_htf",
+            "minutes": 15,
+            "trend_minutes": 120,
+            "stop_atr": 1,
+            "target_atr": 4,
+        },
+        cfg,
+    )
+    assert pull[2] == {"stop_atr": 1.0, "target_atr": 4.0, "minutes": 15.0, "trend_minutes": 120.0}
+    assert loop.idea_from_params("pullback_htf", pull[2])["trend_minutes"] == 120
     for bad in (
+        {
+            "kind": "pullback_htf",
+            "minutes": 60,
+            "trend_minutes": 60,
+            "stop_atr": 1,
+            "target_atr": 2,
+        },
+        {
+            "kind": "pullback_htf",
+            "minutes": 15,
+            "trend_minutes": 240,
+            "stop_atr": 1,
+            "target_atr": 2,
+        },
         {"kind": "martingale", "stop_atr": 1, "target_atr": 2},
         {"kind": "trend_htf", "minutes": 7, "stop_atr": 1, "target_atr": 2},
         {"kind": "trend_htf", "minutes": 15, "stop_atr": 1, "target_atr": 500},
@@ -253,7 +279,8 @@ def test_the_single_best_trial_is_blind_tested_and_only_then_paper_traded(histor
     conn.execute("DELETE FROM strategy_ideas")
     conn.execute("DELETE FROM paper_candidates")
     evaluate, calls = _fake_eval()
-    out = loop.search_ideas(conn, cfg, spec, [], "n1", now, frame, evaluate=evaluate, trials=12)
+    seed = [{"kind": "channel_break", "minutes": 15, "lookback": 20, "stop_atr": 1.5, "target_atr": 6.0, "rationale": "seeded for the test"}]  # fmt: skip
+    out = loop.search_ideas(conn, cfg, spec, seed, "n1", now, frame, evaluate=evaluate, trials=12)
     assert out["best"]["holds"] is True and out["profitable_across_folds"] >= 1
     assert out["pbo"] is not None and out["pbo"] <= 0.5 and "blind" in out["verdict"]
     assert calls["n"] == 12 * 4 + 2  # folds for every trial, the blind period twice for one
@@ -270,7 +297,8 @@ def test_the_single_best_trial_is_blind_tested_and_only_then_paper_traded(histor
     # a best trial that loses on the blind period is recorded as failed and not paper-traded
     conn.execute("DELETE FROM paper_candidates")
     bad_eval, _ = _fake_eval(good_kind="range_fade", held_pct=-0.3)
-    out2 = loop.search_ideas(conn, cfg, spec, [], "n2", now, frame, evaluate=bad_eval, trials=12)
+    seed2 = [{"kind": "range_fade", "minutes": 15, "lookback": 20, "z_entry": 2.0, "stop_atr": 1.0, "target_atr": 2.0, "rationale": "seeded for the test"}]  # fmt: skip
+    out2 = loop.search_ideas(conn, cfg, spec, seed2, "n2", now, frame, evaluate=bad_eval, trials=12)
     assert out2["best"]["holds"] is False and loop.auto_paper(conn, out2["tested"], now) == []
     assert [t["status"] for t in out2["tested"]].count("fails") == 1
     # the number of paper candidates is capped

@@ -1025,6 +1025,40 @@ def signals_add(
     typer.echo(f"watching {name} ({chat_id}){' as gold-only' if gold_only else ''}")
 
 
+@app.command("signals-add-web")
+def signals_add_web(
+    url: str = typer.Argument(..., help="The https address of the page's JSON feed"),
+    name: str = typer.Option(..., help="A name for the dashboard"),
+    db: Path = typer.Option(Path("state/demo.sqlite")),
+) -> None:
+    """Record the trade plans of an analysis page that publishes them as JSON (D-071). Use it
+    only for a page whose owner agreed. Each analyst on the page becomes its own channel; the
+    running reader picks it up within a minute."""
+    import time as _time
+
+    from goldtrader.signals import webdesk
+    from goldtrader.signals.service import SignalService
+
+    conn = connect(db)
+    migrate(conn)
+    now = int(_time.time() * 1000)
+    svc = SignalService(conn, "", lambda: now)
+    try:
+        payload = json.loads(webdesk.http_get(url))
+    except Exception as e:  # noqa: BLE001
+        typer.echo(f"could not read that address: {type(e).__name__}: {e}", err=True)
+        raise typer.Exit(code=1) from e
+    if not isinstance(payload, dict) or "independent_plans" not in (payload.get("analysis") or {}):
+        typer.echo("that address does not return the expected plans", err=True)
+        raise typer.Exit(code=1)
+    sid = webdesk.add_source(conn, svc, name, url, now)
+    ready = webdesk.ready_plans(payload)
+    typer.echo(
+        f"watching {name} (source {sid}): {len(webdesk.ANALYSTS)} analysts, "
+        f"{len(ready)} plan(s) ready right now"
+    )
+
+
 @app.command("signals-remove", context_settings={"ignore_unknown_options": True})
 def signals_remove(
     chat_id: int = typer.Argument(...), db: Path = typer.Option(Path("state/demo.sqlite"))
@@ -1087,6 +1121,9 @@ def signals_run(
             ai_daily_cap_usd=ai_daily_cap_usd,
             alerts=alerts,
         )
+        from goldtrader.signals.webdesk import DeskPoller
+
+        poller = DeskPoller(svc, conn, lambda: int(_time.time() * 1000))
         typer.echo(
             f"signal reader up: {len(svc.watched())} channels watched, "
             f"model fallback {'on' if ask else 'off'}"
@@ -1100,6 +1137,7 @@ def signals_run(
                 heartbeat=lambda status: repo.heartbeat("signals", status),
                 ipv6=ipv6,
                 minutes=minutes,
+                poller=poller,
             )
         except KeyboardInterrupt:
             pass

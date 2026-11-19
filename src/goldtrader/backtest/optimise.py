@@ -52,6 +52,12 @@ SPACE: dict[str, dict[str, tuple]] = {
         "stop_atr": STOPS,
         "target_atr": (1.5, 2.0, 3.0, 4.5),
     },
+    "pullback_htf": {
+        "minutes": (5, 15, 30),
+        "trend_minutes": (60, 120),
+        "stop_atr": STOPS,
+        "target_atr": (1.5, 3.0, 4.5, 6.0, 9.0, 12.0),
+    },
     "breakout_session": {
         "session": ("asia", "london"),
         "stop_atr": STOPS,

@@ -250,6 +250,58 @@ class ChannelBreak:
         return SignalFrame(side, self.stop_atr, self.target_atr)
 
 
+@dataclass(frozen=True)
+class PullbackHTF:
+    """Pullback in the direction of the higher-timeframe trend (D-071 research).
+
+    Two timeframes, both built from completed groups of 1-minute bars so nothing looks ahead:
+      * trend: on `trend_minutes` bars the fast EMA is above the slow one and the close is above
+        the fast one (up), or the mirror image (down);
+      * entry: on `minutes` bars, in an up-trend, a close at or below the entry EMA (the
+        pullback) followed by a close back above it (the rejection) gives a long; the mirror
+        image gives a short. One signal per pullback.
+    It never enters on the move itself, only after price has come back and turned again.
+    """
+
+    id: str = "pullback_htf_v1"
+    kind: str = "pullback_htf"
+    minutes: int = 15
+    trend_minutes: int = 60
+    ema_entry: int = 20
+    trend_fast: int = 8
+    trend_slow: int = 20
+    stop_atr: float = 1.5
+    target_atr: float = 4.5
+
+    def signals(self, df: pd.DataFrame) -> SignalFrame:
+        side = np.zeros(len(df), dtype=np.int8)
+        if self.trend_minutes <= self.minutes:
+            return SignalFrame(side, self.stop_atr, self.target_atr)
+        last, close = _group_closes(df, self.minutes)
+        t_last, t_close = _group_closes(df, self.trend_minutes)
+        if len(last) <= self.ema_entry + 1 or len(t_last) <= self.trend_slow:
+            return SignalFrame(side, self.stop_atr, self.target_atr)
+        tc = pd.Series(t_close)
+        fast = tc.ewm(span=self.trend_fast, adjust=False, min_periods=self.trend_fast).mean()
+        slow = tc.ewm(span=self.trend_slow, adjust=False, min_periods=self.trend_slow).mean()
+        up = ((fast > slow) & (tc > fast)).to_numpy()
+        down = ((fast < slow) & (tc < fast)).to_numpy()
+        t_state = np.where(up, 1, np.where(down, -1, 0)).astype(np.int8)
+        # the trend known at each entry bar: the last higher-timeframe bar completed by then
+        k = np.searchsorted(t_last, last, side="right") - 1
+        trend = np.where(k >= 0, t_state[np.clip(k, 0, None)], 0)
+        c = pd.Series(close)
+        ema = c.ewm(span=self.ema_entry, adjust=False, min_periods=self.ema_entry).mean().to_numpy()
+        prev_c, prev_e = np.roll(close, 1), np.roll(ema, 1)
+        with np.errstate(invalid="ignore"):
+            long_ = (trend == 1) & (prev_c <= prev_e) & (close > ema)
+            short = (trend == -1) & (prev_c >= prev_e) & (close < ema)
+        long_[0] = short[0] = False
+        sig = np.where(long_, 1, np.where(short, -1, 0)).astype(np.int8)
+        side[last[sig != 0]] = sig[sig != 0]
+        return SignalFrame(side, self.stop_atr, self.target_atr)
+
+
 def build_strategy(kind: str, strategy_id: str, params: dict[str, float]) -> Strategy:
     """Factory from config (StrategyConfig.kind/params). Unknown kinds raise."""
     if kind == "trend_htf":
@@ -261,6 +313,14 @@ def build_strategy(kind: str, strategy_id: str, params: dict[str, float]) -> Str
             stop_atr=float(params.get("stop_atr", 4.0)),
             target_atr=float(params.get("target_atr", 8.0)),
             on_cross=bool(params.get("on_cross", 1.0)),
+        )
+    if kind == "pullback_htf":
+        return PullbackHTF(
+            id=strategy_id,
+            minutes=int(params.get("minutes", 15)),
+            trend_minutes=int(params.get("trend_minutes", 60)),
+            stop_atr=float(params.get("stop_atr", 1.5)),
+            target_atr=float(params.get("target_atr", 4.5)),
         )
     if kind == "range_fade":
         return RangeFade(

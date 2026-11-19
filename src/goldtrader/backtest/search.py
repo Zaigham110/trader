@@ -118,11 +118,29 @@ def _session_grid() -> list[Candidate]:
     return out
 
 
+def _pullback_grid() -> list[Candidate]:
+    """Pullback with the higher-timeframe trend: come back to the entry EMA, then turn."""
+    out: list[Candidate] = []
+    for minutes in (5, 15, 30):
+        for trend in (60, 120):
+            for stop in (1.0, 1.5):
+                for rr in (2.0, 4.0, 8.0):
+                    params = {
+                        "minutes": float(minutes),
+                        "trend_minutes": float(trend),
+                        "stop_atr": stop,
+                        "target_atr": round(stop * rr, 2),
+                    }
+                    out.append(("pullback_htf", f"pull_m{minutes}_t{trend}_s{stop}_r{rr}", params))
+    return out
+
+
 FAMILIES: dict[str, Callable[[], list[Candidate]]] = {
     "trend": _trend_grid,
     "range": _range_grid,
     "channel": _channel_grid,
     "session": _session_grid,
+    "pullback": _pullback_grid,
 }
 
 
@@ -155,6 +173,11 @@ def describe(c: Candidate) -> str:
     if kind == "trend_htf":
         how = "EMA cross" if p.get("on_cross") else "trend state"
         return f"{int(p['minutes'])}-minute bars, {how}, {ends}"
+    if kind == "pullback_htf" and "minutes" in p:
+        return (
+            f"Pullback on {int(p['minutes'])}-minute bars with the "
+            f"{int(p['trend_minutes'])}-minute trend, {ends}"
+        )
     if kind == "range_fade" and "minutes" in p:
         return (
             f"Range reversal on {int(p['minutes'])}-minute bars, fade beyond {p['z_entry']} "

@@ -101,6 +101,7 @@ def run(
     ipv6: bool = False,
     minutes: float | None = None,
     tick_s: float = 30.0,
+    poller: Any = None,
 ) -> None:
     """Listen until stopped. Never prompts: an expired login raises NotLoggedIn."""
 
@@ -147,6 +148,12 @@ def run(
             while end is None or loop.time() < end:
                 watched.clear()
                 watched.update(svc.watched())
+                if poller is not None and poller.due():  # web sources (D-071), read-only
+                    try:
+                        fetched = await asyncio.to_thread(poller.fetch_all)
+                        _safe(poller.apply, fetched)
+                    except Exception as ex:  # noqa: BLE001
+                        log.warning("web source poll failed: %s", type(ex).__name__)
                 _safe(svc.score)
                 ok = client.is_connected()
                 _safe(heartbeat, "ok" if ok else "degraded")

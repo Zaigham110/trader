@@ -47,7 +47,7 @@ REVIEW_PROMPT = register(
 
 IDEAS_PROMPT = register(
     "strategy_ideas.system",
-    2,
+    3,
     "You are the nightly Research agent of a gold (XAUUSD) trading system. You propose at most 3 "
     "strategy variants for code to test on stored price history. You do not trade and you change "
     "nothing: your ideas are tried first in a nightly search that also runs its own optimiser. "
@@ -61,6 +61,9 @@ IDEAS_PROMPT = register(
     "- range_fade: fade a close more than `z_entry` standard deviations from the mean of the "
     "last `lookback` bars.\n"
     "- breakout_session: first close beyond the earlier session's range; session asia or london.\n"
+    "- pullback_htf: with the trend of `trend_minutes` bars (60 or 120), wait for a close back "
+    "through the 20-bar average of `minutes` bars (5, 15 or 30) and enter when price turns "
+    "again; it never enters on the move itself.\n"
     "minutes must be one of 5, 15, 30, 60, 120, 240; lookback 5-100; z_entry 1.0-4.0. stop_atr "
     "and target_atr are multiples of the 1-minute ATR; the stop is capped by the owner's limit "
     "(shown), target_atr may be up to 40.\n\n"
@@ -91,8 +94,9 @@ class PlaybookOut(BaseModel):
 class Idea(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    kind: Literal["trend_htf", "range_fade", "channel_break", "breakout_session"]
+    kind: Literal["trend_htf", "range_fade", "channel_break", "breakout_session", "pullback_htf"]
     minutes: int | None = None
+    trend_minutes: int | None = None
     lookback: int | None = None
     z_entry: float | None = None
     on_cross: bool | None = None
