@@ -398,3 +398,41 @@ def test_code_only_never_overrides_a_code_rule_and_is_demo_only():
     assert [p["gate_reason"] for p in _rows(conn, "proposals") if p["bot"] == "code_only"] == [
         "risk_budget_zero"
     ]
+
+
+def test_stop_and_target_are_placed_around_the_price_at_send_time_not_at_cycle_start():
+    class Moving(FakeGateway):
+        def __init__(self):
+            super().__init__(state())
+            self.calls = 0
+
+        def state(self):
+            self.calls += 1
+            # the agents take seconds to answer; by then the market has fallen 10 USD
+            return state() if self.calls == 1 else state(bid=3990.0, ask=3990.2)
+
+    gw = Moving()
+    cyc, reg, fake, conn, _ = _cycle(gw)
+    fake.script("fast", [RISK_OK])
+    fake.script("standard", [GOOD_PROPOSAL])
+    res = cyc.run_once()
+    assert res.status == "sent" and gw.calls == 2
+    it = gw.intents[0]
+    assert (it.stop_price, it.target_price) == (3950.2, 4050.2)  # around 3990.2, not 4000.2
+
+    class Gone(FakeGateway):
+        def __init__(self):
+            super().__init__(state())
+            self.calls = 0
+
+        def state(self):
+            self.calls += 1
+            return state() if self.calls == 1 else None
+
+    gw2 = Gone()
+    cyc2, reg2, fake2, conn2, _ = _cycle(gw2)
+    fake2.script("fast", [RISK_OK])
+    fake2.script("standard", [GOOD_PROPOSAL])
+    res2 = cyc2.run_once()
+    assert res2.status == "gateway_unavailable" and gw2.intents == []  # never send blind
+    assert _rows(conn2, "proposals")[0]["gate_status"] == "gated"

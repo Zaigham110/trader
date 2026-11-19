@@ -187,7 +187,17 @@ class DecisionCycle:
             "UPDATE proposals SET bundle_id=? WHERE proposal_id=?", (bundle_id, proposal_id)
         )
 
-        # Code gates
+        # Code gates. The agents took seconds to answer, so the prices read at the start of
+        # the cycle are stale: read the gateway again and place stop and target around the
+        # price as it is now (D-070). The first demo trade was priced 6 s late, 1.07 USD
+        # away from its fill, which halved its stop.
+        fresh = self.gateway.state()
+        if fresh is None:
+            res.status = "gateway_unavailable"
+            self._step(res, "gateway_state", available=False, at="gate")
+            self._update_proposal(proposal_id, "gated", "gateway_unavailable")
+            return
+        state = fresh
         now = self.clock_ms()
         gi = GateInput(
             proposal=proposal,
