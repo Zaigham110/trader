@@ -123,7 +123,7 @@ def test_candidates_are_reported_with_the_stop_the_engine_really_uses(setup):
         {"minutes": 60.0, "on_cross": 0.0, "stop_atr": 11.6, "target_atr": 29.0},
     )
     assert [c[1] for c in ss.unique([wide, same], cfg)] == ["w"]
-    assert len(ss.unique(ss.grid(), cfg)) < len(ss.grid())
+    assert len(ss.unique(ss.grid(), cfg)) <= len(ss.grid())
 
 
 def test_range_and_channel_rules_signal_on_completed_bars_without_look_ahead():

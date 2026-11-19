@@ -31,7 +31,7 @@ from typing import Any
 Idea = dict[str, Any]
 
 MINUTES = (5, 15, 30, 60, 120, 240)
-STOPS = (0.75, 1.0, 1.5)
+STOPS = (1.0, 1.5, 3.0, 4.5, 6.0)
 SPACE: dict[str, dict[str, tuple]] = {
     "trend_htf": {
         "minutes": MINUTES,
@@ -50,13 +50,13 @@ SPACE: dict[str, dict[str, tuple]] = {
         "lookback": (10, 20, 30, 50),
         "z_entry": (1.5, 2.0, 2.5, 3.0),
         "stop_atr": STOPS,
-        "target_atr": (1.5, 2.0, 3.0, 4.5),
+        "target_atr": (1.5, 3.0, 4.5, 6.0, 9.0, 12.0),
     },
     "pullback_htf": {
         "minutes": (5, 15, 30),
         "trend_minutes": (60, 120),
         "stop_atr": STOPS,
-        "target_atr": (1.5, 3.0, 4.5, 6.0, 9.0, 12.0),
+        "target_atr": (1.5, 3.0, 4.5, 6.0, 9.0, 12.0, 18.0),
     },
     "breakout_session": {
         "session": ("asia", "london"),

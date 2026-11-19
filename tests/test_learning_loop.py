@@ -57,7 +57,8 @@ def _cycle(conn, cid, side, status, reason, action, conf, at_s=T0, hour=12):
 
 def test_signal_decisions_are_graded_and_become_the_agents_own_record():
     conn, cfg = _db()
-    strat = cfg.strategies[0]
+    # a fixed 1.0 / 1.5 rule, so the test does not depend on the demo config's stop
+    strat = cfg.strategies[0].model_copy(update={"params": {"stop_atr": 1.0, "target_atr": 1.5}})
     _falling_bars(conn, cfg)
     for i in range(6):
         _cycle(conn, f"e{i}", 1, "gated", "confidence_0.55", "enter", 0.55)
@@ -118,11 +119,13 @@ def test_playbook_keeps_only_lessons_that_cite_a_real_group():
 
 def test_ideas_outside_the_rule_library_or_the_owner_limits_are_refused():
     cfg = load_config("config/demo.yaml")
-    ok = {"kind": "channel_break", "minutes": 15, "lookback": 30, "stop_atr": 4.0, "target_atr": 20}
+    ok = {"kind": "channel_break", "minutes": 15, "lookback": 30, "stop_atr": 8.0, "target_atr": 20}
     c, why = loop.validate_idea(ok, cfg)
     assert why == "" and c[0] == "channel_break" and c[1].startswith("idea_")
     assert c[2]["stop_atr"] == cfg.owner.risk.stop_atr_max  # clamped like the engine clamps it
-    assert c[2] == {"stop_atr": 1.5, "target_atr": 20.0, "minutes": 15.0, "lookback": 30.0}
+    assert c[2] == {
+        "stop_atr": cfg.owner.risk.stop_atr_max, "target_atr": 20.0, "minutes": 15.0, "lookback": 30.0,
+    }  # fmt: skip
     same, _ = loop.validate_idea({**ok, "stop_atr": 9.0}, cfg)
     assert loop.idea_key(same[0], same[2]) == loop.idea_key(c[0], c[2])  # one idea, not two
     sess, _ = loop.validate_idea(
@@ -218,9 +221,9 @@ def test_nightly_runs_once_per_trading_day_and_survives_a_failing_step(history):
         return [{"tag": "all", "text": f"Live rule signals: {n} played out; be selective.", "evidence_n": n}]  # fmt: skip
 
     ideas = [
-        {"kind": "channel_break", "minutes": 5, "lookback": 20, "stop_atr": 1.5, "target_atr": 4.5,
+        {"kind": "channel_break", "minutes": 5, "lookback": 20, "stop_atr": 7.0, "target_atr": 20,
          "rationale": "Breakouts held on slower bars."},
-        {"kind": "channel_break", "minutes": 5, "lookback": 20, "stop_atr": 3.0, "target_atr": 4.5,
+        {"kind": "channel_break", "minutes": 5, "lookback": 20, "stop_atr": 9.0, "target_atr": 20,
          "rationale": "Same thing once the stop is clamped."},
         {"kind": "grid", "stop_atr": 1, "target_atr": 2, "rationale": "not in the library"},
         {"kind": "trend_htf", "minutes": 5, "stop_atr": 1, "target_atr": 2, "rationale": "a fourth"},

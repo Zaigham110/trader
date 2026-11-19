@@ -12,7 +12,10 @@ strategies:
     kind: trend_atr
     enabled: true
     mode: shadow
-    params: {ema_fast: 20, ema_slow: 50, atr_period: 14, stop_atr: 1.0, target_atr: 1.5}
+    # D-073: stop 5.5 and target 16.5 x the 1-minute ATR (was 1.0 and 1.5). 5.5 leaves room
+    # under the limit of 6.0 for the gateway's own ATR reading.
+    params: {ema_fast: 20, ema_slow: 50, atr_period: 14, stop_atr: 5.5, target_atr: 16.5}
+    stop_atr_max: 6.0
 owner:
   profile: normal
   mode: demo
@@ -28,3 +31,6 @@ owner:
     max_positions: 1
     max_volume_lots: 0.01
     max_spread_pips: 60
+    # D-073: stops up to 6 x the 1-minute ATR (was 1.5). At 0.01 lot that is about 11-16 USD
+    # a losing trade, inside risk_per_trade_pct (25 USD on 5,000).
+    stop_atr_max: 6.0

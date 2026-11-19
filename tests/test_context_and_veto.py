@@ -122,7 +122,8 @@ def test_veto_report_counts_what_happened_to_each_signal():
     cfg = load_config("config/demo.yaml")
     conn = connect(None)
     migrate(conn)
-    strat = cfg.strategies[0]
+    # a fixed 1.0 / 1.5 rule, so the test does not depend on the demo config's stop
+    strat = cfg.strategies[0].model_copy(update={"params": {"stop_atr": 1.0, "target_atr": 1.5}})
     t0 = int(datetime(2026, 11, 17, 12, tzinfo=UTC).timestamp())
     for i in range(1, 40):  # price falls after the signal: a long would have been stopped
         px = 4000.0 - 0.3 * i
