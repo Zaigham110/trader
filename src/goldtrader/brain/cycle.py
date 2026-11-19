@@ -405,7 +405,7 @@ class DecisionCycle:
                     if why == "realtime"
                     else f"after the Strategy agent declined ({why}). "
                 )
-                + f"Taken to exercise the order path, {n + 1} of {cap} today."
+                + f"Demo account, code decides; {n + 1} of {cap} today."
             ),
             invalidation="the stop is hit",
             horizon_minutes=120,

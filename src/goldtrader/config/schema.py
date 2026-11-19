@@ -216,7 +216,7 @@ class OwnerConfig(Frozen):
     # D-068: on a demo account only, take up to this many of the rule's signals a day even
     # when the Strategy agent waits or is under the confidence bar. 0 = off. Every code gate
     # and risk limit still applies. Ignored unless both mode and environment are demo.
-    code_only_demo_trades_per_day: int = Field(default=0, ge=0, le=5)
+    code_only_demo_trades_per_day: int = Field(default=0, ge=0, le=500)  # D-074: was le=5
     code_only_min_gap_minutes: int = Field(default=240, ge=0, le=1440)
     risk: RiskLimits = RiskLimits()
     prohibited_logic: tuple[str, ...] = ("martingale", "grid", "averaging_down")
