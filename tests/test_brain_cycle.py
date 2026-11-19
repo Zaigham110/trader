@@ -446,3 +446,42 @@ def test_stop_and_target_are_placed_around_the_price_at_send_time_not_at_cycle_s
     res2 = cyc2.run_once()
     assert res2.status == "gateway_unavailable" and gw2.intents == []  # never send blind
     assert _rows(conn2, "proposals")[0]["gate_status"] == "gated"
+
+
+def test_the_demo_config_as_shipped_can_place_its_own_trade():
+    """The rule's configured stop and target must fit every schema on the way to an order.
+    D-073 widened them past an old proposal limit and every attempt failed until this was fixed."""
+    from goldtrader.config import load_config
+
+    demo = load_config("config/demo.yaml")
+    strat = next(s for s in demo.strategies if s.enabled)
+    assert demo.owner.code_only_demo_trades_per_day > 0
+    gw = FakeGateway(state())
+    cyc, reg, fake, conn, _ = _cycle(gw, feats=features(atr=2.0))
+    cyc.cfg, cyc.strat = demo, strat
+    fake.script("fast", [RISK_OK])
+    fake.script("standard", [WAIT_ON_SIGNAL])
+    res = cyc.run_once()
+    assert res.status == "sent" and res.gate_reason == "code_only", res.gate_reason
+    it = gw.intents[0]
+    stop, target = float(strat.params["stop_atr"]), float(strat.params["target_atr"])
+    assert stop <= demo.owner.risk.stop_atr_max
+    assert it.stop_price == round(4000.2 - stop * 2.0, 2)
+    assert it.target_price == round(4000.2 + target * 2.0, 2)
+    assert len(gw.intents) == 1  # one decision, one entry, even though the agent then waited
+    # and a second signal while that position is open is refused by the one-position rule
+    gw.st = state(open_positions=1)
+    fake.script("fast", [RISK_OK])
+    fake.script("standard", [WAIT_ON_SIGNAL])
+    assert cyc.run_once().status == "wait" and len(gw.intents) == 1
+
+
+def test_one_decision_never_sends_two_entries_even_if_the_agent_also_wants_in():
+    gw = FakeGateway(state())  # a gateway whose state still shows no position after the order
+    cyc, fake, conn, _ = _probe_cycle(gw, per_day=100, gap=0)
+    fake.script("fast", [RISK_OK])
+    fake.script("standard", [GOOD_PROPOSAL])  # the agent proposes the same entry at 0.8
+    res = cyc.run_once()
+    assert res.status == "sent" and res.gate_reason == "code_only" and len(gw.intents) == 1
+    agent = [p for p in _rows(conn, "proposals") if p["bot"] == "strategy"][0]
+    assert (agent["gate_status"], agent["gate_reason"]) == ("gated", "already_entered")

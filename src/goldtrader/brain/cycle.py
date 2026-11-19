@@ -163,7 +163,9 @@ class DecisionCycle:
 
         # Real-time path (D-072): a code-only demo trade is sent now, on the prices just
         # read, before the agents are asked. They still answer below, for the record.
+        self._entered = False  # one decision never sends two entries (D-074)
         fast = self._fast_entry(ctx, res, state)
+        self._entered = fast is not None
         self._agents(res, ctx, state)
         if fast is not None:
             res.status, res.gate_reason, res.intent_result = "sent", "code_only", fast
@@ -273,6 +275,11 @@ class DecisionCycle:
             if probe is None:
                 return
             proposal_id, intent = probe  # the agent's own proposal stays as journaled
+        elif outcome.intent.kind == "enter" and getattr(self, "_entered", False):
+            # the agent also wants in, but this cycle's entry is already at the broker
+            self._update_proposal(proposal_id, "gated", "already_entered")
+            res.status, res.gate_reason = "gated", "already_entered"
+            return
         else:
             intent = outcome.intent
 
@@ -372,6 +379,8 @@ class DecisionCycle:
         cap = int(getattr(o, "code_only_demo_trades_per_day", 0) or 0)
         if cap <= 0 or o.mode != "demo" or self.cfg.account.environment != "demo":
             return None
+        if why != "realtime" and getattr(self, "_entered", False):
+            return None  # this cycle already sent its entry on the real-time path
         veto = why == "wait" or why.startswith("confidence_")
         if ctx.signal_side == 0 or not (veto or why == "realtime"):
             return None

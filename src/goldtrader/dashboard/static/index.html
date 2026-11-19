@@ -791,7 +791,7 @@ function onLive(L) {
     if (cycleWasRunning && !c.running) { cycleWasRunning = false; say("Decision", String(c.status).toUpperCase() + (c.gate_reason && c.gate_reason !== c.status ? " (" + c.gate_reason + ")" : ""), c.status === "error" ? "bad" : "", c.finished_ms); loadSnap(); }
     if (!c.running) lastCycle = c;
     const open = t && t.session === "OPEN", due = c.started_ms + L.cycle_every_s * 1000, left = Math.round((due - L.now_ms) / 1000);
-    $("nextText").textContent = c.running ? "deciding now…" : !t ? "gateway not reachable" : !open ? "session " + t.session + ": agents wait for the market" : left > 0 ? "next decision in " + Math.floor(left / 60) + ":" + String(left % 60).padStart(2, "0") : "next decision due";
+    $("nextText").textContent = c.running ? "deciding now…" : !t ? "gateway not reachable" : !open ? "session " + t.session + ": agents wait for the market" : left > 0 ? "watching every 1-minute bar: a signal is acted on at once · routine check in " + Math.floor(left / 60) + ":" + String(left % 60).padStart(2, "0") : "watching every 1-minute bar · routine check due";
     $("nextBar").style.width = (c.running ? 100 : open ? Math.max(0, Math.min(100, 100 - left / L.cycle_every_s * 100)) : 0) + "%";
   } else $("nextText").textContent = "no decision cycle yet";
   setBadge();

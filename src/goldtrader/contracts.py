@@ -19,8 +19,10 @@ class StrategyProposal(Strict):
 
     action: Literal["wait", "enter", "exit", "move_stop"]
     side: Literal["long", "short"] | None = None
-    stop_atr: float | None = Field(default=None, ge=0.05, le=5.0)
-    target_atr: float | None = Field(default=None, ge=0.05, le=10.0)
+    # Shape limits only; the real bounds are the owner's limits, applied by code (D-073:
+    # these were 5 and 10, below the stop the demo rule now uses, and blocked its trades).
+    stop_atr: float | None = Field(default=None, ge=0.05, le=10.0)
+    target_atr: float | None = Field(default=None, ge=0.05, le=40.0)
     new_stop_price: float | None = Field(default=None, gt=0)
     confidence: float = Field(ge=0.0, le=1.0)
     thesis: str = Field(min_length=20, max_length=600)
