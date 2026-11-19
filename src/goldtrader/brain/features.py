@@ -87,6 +87,17 @@ class DbFeatures:
             hour_utc=int(row.get("hour_utc", 0)),
         )
 
+    def latest_bar_time(self) -> int | None:
+        """Open time of the newest stored 1-minute bar (one cheap query, no frame load)."""
+        row = self.repo.c.execute(
+            "SELECT MAX(time_s) FROM bars WHERE symbol=? AND seconds=60", (self.symbol,)
+        ).fetchone()
+        return int(row[0]) if row and row[0] is not None else None
+
+    def refresh(self) -> None:
+        """Drop the cached frame so the next read includes the bar that just closed."""
+        self._loaded_at = 0.0
+
     def signal(self) -> int:
         df = self._frame()
         if df is None or df.empty:

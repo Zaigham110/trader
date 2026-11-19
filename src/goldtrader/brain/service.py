@@ -209,6 +209,11 @@ class BrainService:
                 config_path=config_path,
             )
         self.scheduler = Scheduler(clock=lambda: self.clock_ms() / 1000.0)
+        # Real time (D-072): look at every 1-minute bar as it closes and decide at once when
+        # the rule gives a signal, instead of noticing one bar in five. Registered first so a
+        # triggered cycle runs in the same tick.
+        self._watched_bar: int | None = None
+        self.scheduler.add(Job("bar_watch", self._bar_watch_job, every_seconds=2))
         self.scheduler.add(
             Job("cycle", self._cycle_job, every_seconds=cycle_every_s, only_when=self._gateway_open)
         )
@@ -253,6 +258,19 @@ class BrainService:
         st = self.gateway.state()
         self._last_state = st
         return st is not None and st.session == "OPEN" and st.entries_allowed and not st.kill_switch
+
+    def _bar_watch_job(self) -> None:
+        t = self.feats.latest_bar_time()
+        if t is None or t == self._watched_bar:
+            return
+        first, self._watched_bar = self._watched_bar is None, t
+        if first:
+            return  # the bar that was already there at start is not news
+        self.feats.refresh()
+        if self.clock_ms() / 1000.0 - (t + 60) > 30:
+            return  # an old bar arriving late (refill after an outage) is not a signal
+        if self.feats.signal() != 0:
+            self.scheduler.trigger("cycle")
 
     def _cycle_job(self) -> None:
         self.last_cycle = self.cycle.run_once()

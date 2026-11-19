@@ -403,3 +403,51 @@ def test_brain_starts_the_nightly_run_in_its_own_process_once(tmp_path):
     no_cfg = BrainService(cfg, Repo(conn), gateway=None, provider=None, clock_ms=lambda: now["ms"] + 2 * 86_400_000, spawn=started.append)  # fmt: skip
     no_cfg._learning_loop_job()
     assert len(started) == 3  # without a config path nothing is started
+
+
+def test_brain_looks_at_every_closed_bar_and_decides_at_once_on_a_signal(tmp_path):
+    from goldtrader.brain.service import BrainService
+    from goldtrader.db import Repo
+
+    cfg = load_config("config/demo.yaml")
+    conn = connect(tmp_path / "d.sqlite")
+    migrate(conn)
+    now = {"ms": T0 * 1000}
+    brain = BrainService(
+        cfg, Repo(conn), gateway=None, provider=None, clock_ms=lambda: now["ms"],
+        spawn=lambda cmd: None,
+    )  # fmt: skip
+    assert brain.scheduler.jobs[0].name == "bar_watch"  # before the cycle, so it runs in one tick
+    signal = {"v": 0}
+    brain.feats.signal = lambda: signal["v"]
+    cycle = next(j for j in brain.scheduler.jobs if j.name == "cycle")
+
+    def bar(t):
+        conn.execute(
+            "INSERT INTO bars VALUES (?,60,?,4000,4001,3999,4000,4000.2,4001.2,3999.2,4000.2,1,'t')",
+            (cfg.account.symbol, t),
+        )
+
+    brain._bar_watch_job()
+    assert not cycle.pending_trigger  # no bars at all
+    bar(T0 - 120)
+    signal["v"] = 1
+    brain._bar_watch_job()
+    assert not cycle.pending_trigger  # the bar already there at start is not news
+    bar(T0 - 60)  # closes exactly now
+    signal["v"] = 0
+    brain._bar_watch_job()
+    assert not cycle.pending_trigger  # a new bar without a signal
+    now["ms"] += 60_000
+    bar(T0)
+    signal["v"] = -1
+    brain._bar_watch_job()
+    assert cycle.pending_trigger  # a signal on the bar that just closed: decide now
+    cycle.pending_trigger = False
+    brain._bar_watch_job()
+    assert not cycle.pending_trigger  # the same bar is not acted on twice
+    bar(T0 + 60)  # a bar that arrives ten minutes late (refilled after an outage)
+    now["ms"] += 11 * 60_000
+    brain._bar_watch_job()
+    assert not cycle.pending_trigger
+    assert brain.feats.latest_bar_time() == T0 + 60

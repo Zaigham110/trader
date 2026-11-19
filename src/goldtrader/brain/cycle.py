@@ -161,6 +161,54 @@ class DecisionCycle:
         self._step(res, "context", signal_side=ctx.signal_side, news_events=len(ctx.news_events))
         self._snapshot(res, ctx, state)
 
+        # Real-time path (D-072): a code-only demo trade is sent now, on the prices just
+        # read, before the agents are asked. They still answer below, for the record.
+        fast = self._fast_entry(ctx, res, state)
+        self._agents(res, ctx, state)
+        if fast is not None:
+            res.status, res.gate_reason, res.intent_result = "sent", "code_only", fast
+
+    def _fast_entry(
+        self, ctx: BotContext, res: CycleResult, state: GatewayState
+    ) -> IntentResult | None:
+        if ctx.signal_side == 0:
+            return None
+        budget, _rules = hard_rules(ctx, 100)  # code rules only: no model in this path
+        gi = GateInput(
+            proposal=self._signal_only_proposal(ctx),
+            proposal_id="",
+            proposal_age_s=0.0,
+            bundle_id=self.strat.id,
+            signal_side=ctx.signal_side,
+            features=ctx.features,
+            session=_session(state),
+            entries_allowed=state.entries_allowed,
+            open_positions=state.open_positions,
+            risk_budget=budget,
+            bid=state.bid if state.bid is not None else 0.0,
+            ask=state.ask if state.ask is not None else 0.0,
+            now_ms=self.clock_ms(),
+        )
+        probe = self._code_only(ctx, res, gi, self.strat, "realtime")
+        if probe is None:
+            return None
+        pid, intent = probe
+        self._record_intent(intent)
+        result = self.gateway.send_intent(intent)
+        self._finish_intent(result)
+        self._step(
+            res,
+            "intent",
+            intent_id=intent.intent_id,
+            kind=intent.kind,
+            status=result.status,
+            risk_code=result.risk_code,
+            delay_ms=self.clock_ms() - ctx.now_ms,
+        )
+        self._update_proposal(pid, "sent", result.status)
+        return result
+
+    def _agents(self, res: CycleResult, ctx: BotContext, state: GatewayState) -> None:
         # Risk-advisor (LLM, can only lower) → hard rules (code) → budget
         budget = self._risk_budget(ctx, res)
         ctx.risk_budget = budget
@@ -324,7 +372,8 @@ class DecisionCycle:
         cap = int(getattr(o, "code_only_demo_trades_per_day", 0) or 0)
         if cap <= 0 or o.mode != "demo" or self.cfg.account.environment != "demo":
             return None
-        if ctx.signal_side == 0 or not (why == "wait" or why.startswith("confidence_")):
+        veto = why == "wait" or why.startswith("confidence_")
+        if ctx.signal_side == 0 or not (veto or why == "realtime"):
             return None
         day = ctx.now_ms - ctx.now_ms % 86_400_000
         n, last = self.c.execute(
@@ -350,8 +399,13 @@ class DecisionCycle:
             target_atr=target,
             confidence=1.0,
             thesis=(
-                f"code-only demo trade ({strat.id}): {side} on the rule's signal; the Strategy "
-                f"agent declined ({why}). Taken to exercise the order path, {n + 1} of {cap} today."
+                f"code-only demo trade ({strat.id}): {side} on the rule's signal, "
+                + (
+                    "sent at once, before the agents answered. "
+                    if why == "realtime"
+                    else f"after the Strategy agent declined ({why}). "
+                )
+                + f"Taken to exercise the order path, {n + 1} of {cap} today."
             ),
             invalidation="the stop is hit",
             horizon_minutes=120,

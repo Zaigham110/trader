@@ -338,24 +338,31 @@ def _probe_cycle(gw, per_day=2, gap=60, signal=1, **owner):
     return cyc, fake, conn, clock
 
 
-def test_demo_takes_a_capped_number_of_signals_the_agent_declined():
+def test_demo_sends_a_capped_number_of_rule_signals_at_once_before_the_agents_answer():
     gw = FakeGateway(state())
     cyc, fake, conn, clock = _probe_cycle(gw)
     fake.script("fast", [RISK_OK] * 6)
     fake.script("standard", [WAIT_ON_SIGNAL, LOW_CONF, WAIT_ON_SIGNAL, WAIT_ON_SIGNAL])
     res = cyc.run_once()
     assert res.status == "sent" and res.gate_reason == "code_only" and len(gw.intents) == 1
+    assert res.intent_result.status == "executed"
     it = gw.intents[0]
     assert it.kind == "enter" and it.side == "long"
     assert (it.stop_price, it.target_price) == (3960.2, 4060.2)  # the rule's own 1.0 / 1.5 ATR
     props = {p["bot"]: p for p in _rows(conn, "proposals")}
-    assert props["strategy"]["gate_status"] == "wait"  # the agent's decision stays as it was
+    assert props["strategy"]["gate_status"] == "wait"  # the agent was still asked, and recorded
     assert props["strategy"]["proposal_id"] == res.proposal_id
     probe = props["code_only"]
     assert probe["gate_status"] == "sent" and probe["proposal_id"] == it.proposal_id
-    assert "agent declined (wait)" in probe["thesis"] and "1 of 2 today" in probe["thesis"]
-    steps = [s["step"] for s in json.loads(_rows(conn, "brain_cycles")[0]["steps_json"])]
-    assert steps[-3:] == ["gate", "code_only", "intent"]
+    assert "sent at once, before the agents answered" in probe["thesis"]
+    assert "1 of 2 today" in probe["thesis"]
+    steps = json.loads(_rows(conn, "brain_cycles")[0]["steps_json"])
+    names = [s["step"] for s in steps]
+    # the order goes out before any model is asked
+    assert names == [
+        "gateway_state", "context", "code_only", "intent", "risk_advisor", "strategy", "route", "gate",
+    ]  # fmt: skip
+    assert steps[3]["delay_ms"] == 0 and len(fake.requests) == 2
     # too soon after the last one: the gap holds even though the daily cap is not reached
     clock["t"] += 30 * 60_000
     assert cyc.run_once().status == "gated" and len(gw.intents) == 1
@@ -382,22 +389,25 @@ def test_code_only_never_overrides_a_code_rule_and_is_demo_only():
         fake.script("standard", [script])
         res = cyc.run_once()
         assert gw.intents == [] and res.status in ("wait", "gated", "blocked"), kwargs
-    # an agent that disagrees with the signal is a code block (not a veto): nothing is forced
+    # a wide spread blocks the real-time order like any other entry
+    gw = FakeGateway(state())
+    cyc, reg, fake, conn, _ = _cycle(gw, feats=features(spread_regime="wide"))
+    cyc.cfg = cfg(owner={"risk": {"max_volume_lots": 1.0}, "code_only_demo_trades_per_day": 2})
+    fake.script("fast", [RISK_OK])
+    fake.script("standard", [WAIT_ON_SIGNAL])
+    assert cyc.run_once().status == "wait" and gw.intents == []
+    why = [p["gate_reason"] for p in _rows(conn, "proposals") if p["bot"] == "code_only"]
+    # refused at once, and again after the agent waited: the code rules set the budget to zero
+    assert len(why) == 2 and set(why) <= {"risk_budget_zero", "spread"}
+    # the order follows the rule's signal: an agent arguing the other way changes nothing
     gw = FakeGateway(state())
     cyc, fake, conn, _ = _probe_cycle(gw, signal=-1)
     fake.script("fast", [RISK_OK])
     fake.script("standard", [GOOD_PROPOSAL])  # proposes long against a short signal
     res = cyc.run_once()
-    assert res.gate_reason == "disagrees_with_signal" and gw.intents == []
-    # and with the risk budget at zero nothing is sent either
-    gw = FakeGateway(state())
-    cyc, fake, conn, _ = _probe_cycle(gw)
-    fake.script("fast", [{"budget": 0, "reasons": ["event risk"]}])
-    fake.script("standard", [WAIT_ON_SIGNAL])
-    assert cyc.run_once().status == "wait" and gw.intents == []
-    assert [p["gate_reason"] for p in _rows(conn, "proposals") if p["bot"] == "code_only"] == [
-        "risk_budget_zero"
-    ]
+    assert res.status == "sent" and [i.side for i in gw.intents] == ["short"]
+    agent = [p for p in _rows(conn, "proposals") if p["bot"] == "strategy"][0]
+    assert agent["gate_reason"] == "disagrees_with_signal"  # its own entry is still refused
 
 
 def test_stop_and_target_are_placed_around_the_price_at_send_time_not_at_cycle_start():
