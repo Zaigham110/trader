@@ -53,7 +53,7 @@ def test_watchdog_thread_fires_on_a_loop_that_stops_beating():
     assert fired.wait(3)
 
 
-def test_gateway_run_loop_beats_after_every_step():
+def test_gateway_run_loop_beats_only_after_a_step_that_worked():
     from goldtrader.gateway.service import GatewayService
 
     class Stub:
@@ -62,8 +62,14 @@ def test_gateway_run_loop_beats_after_every_step():
             "C", (), {"data": type("D", (), {"tick_poll_closed_s": 0, "tick_poll_ms": 0})()}
         )()
 
+        calls = 0
+
         def step(self):
-            return None
+            # every second step fails (returns None), as when the terminal link is gone
+            self.calls += 1
+            if self.calls % 2 == 0:
+                return None
+            return type("Snap", (), {"session": None})()
 
     stop = threading.Event()
     beats: list[int] = []
@@ -76,7 +82,7 @@ def test_gateway_run_loop_beats_after_every_step():
     s = Stub()
     s.on_step = beat
     GatewayService.run(s, stop)
-    assert len(beats) == 3
+    assert len(beats) == 3 and s.calls == 5  # the two failed steps did not count
 
 
 def test_owner_is_told_when_the_gateway_goes_quiet_and_when_it_returns():

@@ -407,7 +407,9 @@ def gateway(
                 watchdog_s,
                 name="gateway loop",
                 dump_path=state_dir / "gateway.stuck.log",
-                on_exit=lambda why: exit_log.record_exit("watchdog", why),
+                on_exit=lambda why: exit_log.record_exit(
+                    "watchdog", f"{why}; last step error: {svc.counters.last_error}"
+                ),
             )
             svc.on_step = dog.beat
             dog.start()

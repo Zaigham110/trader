@@ -312,7 +312,9 @@ class GatewayService:
         d = self.cfg.data
         while not stop.is_set():
             snap = self.step()
-            if self.on_step is not None:
+            # Only a step that worked counts as progress (D-075). A step that fails returns None;
+            # when every step fails (the terminal link is gone) the watchdog must see a stuck loop.
+            if self.on_step is not None and snap is not None:
                 self.on_step()
             closed = snap is None or snap.session in (SessionState.CLOSED, SessionState.STALE)
             stop.wait((d.tick_poll_closed_s * 1000 if closed else d.tick_poll_ms) / 1000.0)
