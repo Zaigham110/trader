@@ -87,6 +87,7 @@ class _Open:
     spread_cost_entry: float
     slip_cost_entry: float
     bars_held: int = 0
+    at_breakeven: bool = False
 
 
 def _round_volume(v: float, spec: SymbolSpec) -> float:
@@ -123,7 +124,20 @@ def run_backtest(
     clock: SessionClock | None = None,
     events: list[Event] | tuple[Event, ...] = (),
     equity0: float = 5000.0,
+    on_opposite: str = "hold",
+    breakeven_at_r: float | None = None,
 ) -> BacktestResult:
+    """Replay `strategy` bar by bar under the owner's risk rules and the cost model.
+
+    Exit management (research options, both off by default):
+      on_opposite: what an opposite signal does to an open position. ``hold`` ignores it,
+        ``close`` closes at the next bar's open, ``reverse`` closes and enters the new side
+        at that same open (through every entry check).
+      breakeven_at_r: once a bar has traded this many stop-distances in profit, the stop
+        moves to the entry price from the next bar on.
+    """
+    if on_opposite not in ("hold", "close", "reverse"):
+        raise ValueError("on_opposite must be hold, close or reverse")
     cost = cost or CostModel(
         commission_per_lot_per_side_usd=cfg.account.commission_per_lot_per_side_usd
     )
@@ -245,11 +259,19 @@ def run_backtest(
         pos = None
 
     pending: int = 0  # signal side carried from bar i-1 to be filled at bar i open
+    flip: int = 0  # opposite signal seen at bar i-1 while a position was open
 
     for i in range(n):
         state, entries_ok = session(i)
         day = int(t[i] // 86400)
         week = int((t[i] + 3 * 86400) // (7 * 86400))
+
+        # 0. an opposite signal on the previous bar closes the position at this bar's open
+        if flip != 0 and pos is not None and killed_at is None:
+            close_position(i, cost.exit_price(pos.side, bo[i], ao[i], spec), "opposite_signal")
+            if on_opposite == "reverse":
+                pending = flip
+        flip = 0
 
         # 1. fill the pending entry at this bar's open
         if pending != 0 and pos is None and killed_at is None:
@@ -317,7 +339,8 @@ def run_backtest(
                     hit_tp = bh[i] >= pos.tp
                     if hit_sl:
                         px = min(pos.sl, bo[i]) if cost.stop_gap_fill else pos.sl
-                        close_position(i, px - cost.slippage_points * spec.point, "stop")
+                        why = "breakeven" if pos.at_breakeven else "stop"
+                        close_position(i, px - cost.slippage_points * spec.point, why)
                     elif hit_tp:
                         close_position(i, pos.tp, "target")
                 else:
@@ -325,9 +348,18 @@ def run_backtest(
                     hit_tp = al[i] <= pos.tp
                     if hit_sl:
                         px = max(pos.sl, ao[i]) if cost.stop_gap_fill else pos.sl
-                        close_position(i, px + cost.slippage_points * spec.point, "stop")
+                        why = "breakeven" if pos.at_breakeven else "stop"
+                        close_position(i, px + cost.slippage_points * spec.point, why)
                     elif hit_tp:
                         close_position(i, pos.tp, "target")
+            if pos is not None and breakeven_at_r is not None and not pos.at_breakeven:
+                # the bar survived its stop and target; if it reached the trigger, the stop
+                # sits at the entry price from the next bar on
+                trigger = breakeven_at_r * pos.stop_distance
+                if pos.side == "long" and bh[i] - pos.entry_price >= trigger:
+                    pos.sl, pos.at_breakeven = round(pos.entry_price, spec.digits), True
+                elif pos.side == "short" and pos.entry_price - al[i] >= trigger:
+                    pos.sl, pos.at_breakeven = round(pos.entry_price, spec.digits), True
 
         # 3. mark equity, check drawdown kill switch
         floating = 0.0
@@ -347,6 +379,9 @@ def run_backtest(
         # 4. decide the next entry from this bar's signal (acted on at bar i+1 open)
         if killed_at is None and pos is None and i + 1 < n and sig.side[i] != 0:
             pending = int(sig.side[i])
+        elif pos is not None and on_opposite != "hold" and i + 1 < n and sig.side[i] != 0:
+            if (sig.side[i] > 0) != (pos.side == "long"):
+                flip = int(sig.side[i])
 
     if pos is not None:  # end of data: close at last close (reported as 'end_of_data')
         close_position(n - 1, cost.exit_price(pos.side, bc[-1], ac[-1], spec), "end_of_data")

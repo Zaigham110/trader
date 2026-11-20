@@ -252,3 +252,72 @@ def test_flat_strategy_and_factory(frame):
     assert isinstance(s, TrendATR) and s.stop_atr == 0.8
     with pytest.raises(ValueError):
         build_strategy("grid", "g", {})
+
+
+class _Script:
+    """Signals on the given bars: {bar index: side}."""
+
+    id = "script"
+    kind = "test"
+
+    def __init__(self, sides, stop_atr=1.0, target_atr=2.0):
+        self.sides, self.stop_atr, self.target_atr = sides, stop_atr, target_atr
+
+    def signals(self, df):
+        s = np.zeros(len(df), dtype=np.int8)
+        for i, side in self.sides.items():
+            s[i] = side
+        return SignalFrame(s, self.stop_atr, self.target_atr)
+
+
+QUIET = (4000, 4001, 3999, 4000)
+
+
+def _managed(rows, sides, **kw):
+    cfg = _cfg(risk_per_trade_pct=2.0, max_volume_lots=1.0, stop_atr_max=3.0)
+    return run_backtest(
+        _hand_frame(rows),
+        _Script(sides),
+        cfg,
+        SPEC,
+        cost=CostModel(slippage_points=0),
+        equity0=100_000,
+        **kw,
+    )
+
+
+def test_an_opposite_signal_is_ignored_closed_or_reversed_as_asked():
+    rows = [QUIET, QUIET, QUIET, QUIET, QUIET, (4000, 4001, 3975, 3978), QUIET]
+    sides = {0: +1, 2: -1}  # long fills at bar 1; the short signal comes while it is open
+    hold = _managed(rows, sides)
+    assert "opposite_signal" not in set(hold.trades.get("exit_reason", []))
+
+    close = _managed(rows, sides, on_opposite="close")
+    assert close.n_trades == 1
+    t = close.trades.iloc[0]
+    assert t.exit_reason == "opposite_signal" and t.exit_price == pytest.approx(4000.0)
+    assert t.exit_time == _hand_frame(rows).time.iloc[3]  # the open of the bar after the signal
+
+    rev = _managed(rows, sides, on_opposite="reverse")
+    assert rev.n_trades == 2
+    first, second = rev.trades.iloc[0], rev.trades.iloc[1]
+    assert first.exit_reason == "opposite_signal" and second.side == "short"
+    assert second.entry_time == first.exit_time  # out and in at the same open
+    assert second.exit_reason == "target" and second.net_pnl > 0
+
+    with pytest.raises(ValueError):
+        _managed(rows, sides, on_opposite="flip")
+
+
+def test_breakeven_moves_the_stop_to_entry_only_after_the_trigger():
+    # long from 4000.2, stop 3990.2, target 4020.2; bar 2 trades 1 stop-distance in profit,
+    # bar 3 dips to 3995: below the entry but above the original stop
+    rows = [QUIET, QUIET, (4000, 4011, 3999, 4008), (4005, 4006, 3995, 3996), QUIET]
+    plain = _managed(rows, {0: +1})
+    assert plain.trades.iloc[0].exit_reason == "end_of_data"  # original stop never touched
+    be = _managed(rows, {0: +1}, breakeven_at_r=1.0)
+    assert be.n_trades == 1
+    t = be.trades.iloc[0]
+    assert t.exit_reason == "breakeven" and t.exit_price == pytest.approx(4000.2)
+    late = _managed(rows, {0: +1}, breakeven_at_r=2.0)
+    assert late.trades.iloc[0].exit_reason == "end_of_data"  # trigger not reached: stop stays
