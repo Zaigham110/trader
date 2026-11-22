@@ -23,7 +23,8 @@ $py = Join-Path $Repo ".venv\Scripts\goldctl.exe"
 if (-not (Test-Path $py)) { throw "goldctl not found at $py; create the venv first" }
 
 $settings = New-ScheduledTaskSettingsSet -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) `
-  -ExecutionTimeLimit (New-TimeSpan -Days 365) -StartWhenAvailable -MultipleInstances IgnoreNew
+  -ExecutionTimeLimit (New-TimeSpan -Days 365) -StartWhenAvailable -MultipleInstances IgnoreNew `
+  -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries  # a laptop on battery must still start and keep running
 $trigger = New-ScheduledTaskTrigger -AtLogOn
 
 $gw = New-ScheduledTaskAction -Execute $py -Argument "gateway --real --config $Config --db $Db" -WorkingDirectory $Repo
