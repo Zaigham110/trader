@@ -351,3 +351,31 @@ def test_trailing_stop_mirrors_for_a_short_and_the_target_can_be_removed():
     deep = [QUIET, QUIET, (4000, 4001, 3970, 3972), (3972, 3973, 3971, 3972)]
     assert _managed(deep, {0: -1}).trades.iloc[0].exit_reason == "target"
     assert _managed(deep, {0: -1}, use_target=False).trades.iloc[0].exit_reason == "end_of_data"
+
+
+def test_more_than_one_position_is_opt_in_and_each_is_managed_on_its_own():
+    rows = [QUIET] * 4 + [(4000, 4001, 3985, 3986), QUIET]
+    sides = {0: +1, 1: +1, 2: -1}
+    one = _managed(rows, sides)
+    assert one.n_trades == 1  # default: the second and third signal are ignored
+    two = _managed(rows, sides, max_positions=2)
+    assert list(two.trades.side) == ["long", "long"]
+    assert list(two.trades.exit_reason) == ["stop", "stop"]  # bar 4 takes out both stops
+    assert two.trades.net_pnl.sum() == pytest.approx(2 * one.trades.net_pnl.sum())
+    three = _managed(rows, sides, max_positions=3)
+    assert sorted(three.trades.side) == ["long", "long", "short"]
+    # the short is not touched by the fall that stops both longs
+    assert three.trades[three.trades.side == "short"].iloc[0].exit_reason == "end_of_data"
+    same = _managed(rows, sides, max_positions=3, stack="same_side")
+    assert same.n_trades == 2 and same.rejected.get("opposite_side_open") == 1
+    gap = _managed(rows, sides, max_positions=2, entry_gap_min=30)
+    assert gap.n_trades == 1 and gap.rejected.get("entry_gap") == 2  # both later signals
+    with pytest.raises(ValueError):
+        _managed(rows, sides, max_positions=0)
+
+
+def test_an_opposite_signal_closes_every_position_it_is_against():
+    rows = [QUIET] * 6
+    res = _managed(rows, {0: +1, 1: +1, 3: -1}, max_positions=2, on_opposite="close")
+    assert res.n_trades == 2 and set(res.trades.exit_reason) == {"opposite_signal"}
+    assert res.trades.exit_time.nunique() == 1

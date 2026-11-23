@@ -1,4 +1,4 @@
-"""Event-driven single-position backtester on bid/ask bars (TEST_PLAN §2, D-009, D-014, D-020).
+"""Event-driven backtester on bid/ask bars, one position unless told otherwise (TEST_PLAN §2, D-009, D-014, D-020).
 
 Rules (all enforced in code, none configurable away):
   * Decision at bar i uses features/signals of bar i (causal); the order is filled at bar i+1's
@@ -10,7 +10,7 @@ Rules (all enforced in code, none configurable away):
     one bar the stop is assumed first (conservative). Gaps fill at the worse of level and open.
   * Costs: spread crossed at entry and exit from the bar's own bid/ask, slippage, commission;
     swap is 0 by construction (no overnight holds).
-  * Risk: one position; volume from risk per trade and stop distance, rounded down to volume_step,
+  * Risk: one position (unless `max_positions` says otherwise); volume from risk per trade and stop distance, rounded down to volume_step,
     clamped to [volume_min, max_volume_lots]; the realised risk % is recorded and the entry is
     rejected if it exceeds the configured risk per trade; daily and weekly loss limits block
     entries; the drawdown limit stops the run (kill switch). Spread cap and 'wide' regime block.
@@ -131,6 +131,9 @@ def run_backtest(
     trail_atr: float | None = None,
     trail_after_r: float = 0.0,
     use_target: bool = True,
+    max_positions: int = 1,
+    stack: str = "any",
+    entry_gap_min: float = 0.0,
 ) -> BacktestResult:
     """Replay `strategy` bar by bar under the owner's risk rules and the cost model.
 
@@ -144,9 +147,20 @@ def run_backtest(
         stop follows the best price reached at this many ATR (the ATR at entry) and only
         ever moves toward profit. A bar's own extreme moves the stop for the next bar.
       use_target: False removes the fixed target, so only the stop closes the trade.
+
+    More than one position (research option, off by default):
+      max_positions: how many positions may be open at once. Each one is sized, stopped and
+        closed on its own, so the risk open at one moment can be this many times the
+        per-trade risk. The loss limits and the drawdown stop see all of them together.
+      stack: ``any`` lets a new signal open next to a position of either side; ``same_side``
+        refuses a signal against an open position.
+      entry_gap_min: minutes that must pass after the latest entry before another position
+        is opened next to it (a rule that signals on every bar would otherwise just double up).
     """
     if on_opposite not in ("hold", "close", "reverse"):
         raise ValueError("on_opposite must be hold, close or reverse")
+    if max_positions < 1 or stack not in ("any", "same_side"):
+        raise ValueError("max_positions must be >= 1 and stack any or same_side")
     cost = cost or CostModel(
         commission_per_lot_per_side_usd=cfg.account.commission_per_lot_per_side_usd
     )
@@ -193,7 +207,8 @@ def run_backtest(
     equity_curve = np.empty(n)
     trades: list[dict] = []
     rejected: dict[str, int] = {}
-    pos: _Open | None = None
+    open_: list[_Open] = []
+    last_entry = 0
     killed_at: datetime | None = None
     day_pnl: dict[int, float] = {}
     week_pnl: dict[int, float] = {}
@@ -211,9 +226,8 @@ def run_backtest(
             state_cache[key] = (d.state, d.entries_allowed)
         return state_cache[key]
 
-    def close_position(i: int, price: float, reason: str) -> None:
-        nonlocal pos, equity, consecutive_losses, cooldown_until
-        assert pos is not None
+    def close_position(i: int, pos: _Open, price: float, reason: str) -> None:
+        nonlocal equity, consecutive_losses, cooldown_until
         contract = spec.trade_contract_size
         direction = 1.0 if pos.side == "long" else -1.0
         gross = direction * (price - pos.entry_price) * pos.volume * contract
@@ -265,7 +279,7 @@ def run_backtest(
                 consecutive_losses = 0
         else:
             consecutive_losses = 0
-        pos = None
+        open_.remove(pos)
 
     pending: int = 0  # signal side carried from bar i-1 to be filled at bar i open
     flip: int = 0  # opposite signal seen at bar i-1 while a position was open
@@ -276,14 +290,17 @@ def run_backtest(
         week = int((t[i] + 3 * 86400) // (7 * 86400))
 
         # 0. an opposite signal on the previous bar closes the position at this bar's open
-        if flip != 0 and pos is not None and killed_at is None:
-            close_position(i, cost.exit_price(pos.side, bo[i], ao[i], spec), "opposite_signal")
-            if on_opposite == "reverse":
+        if flip != 0 and killed_at is None:
+            against = [p for p in open_ if (flip > 0) != (p.side == "long")]
+            for pos in against:
+                px = cost.exit_price(pos.side, bo[i], ao[i], spec)
+                close_position(i, pos, px, "opposite_signal")
+            if against and on_opposite == "reverse":
                 pending = flip
         flip = 0
 
         # 1. fill the pending entry at this bar's open
-        if pending != 0 and pos is None and killed_at is None:
+        if pending != 0 and len(open_) < max_positions and killed_at is None:
             side = "long" if pending > 0 else "short"
             why = None
             if not entries_ok or state is not SessionState.OPEN:
@@ -316,27 +333,30 @@ def run_backtest(
                     tp = entry + target_atr * a if side == "long" else entry - target_atr * a
                     if not use_target:
                         tp = math.inf if side == "long" else -math.inf
-                    pos = _Open(
-                        side=side,
-                        volume=vol,
-                        entry_price=entry,
-                        entry_time=int(t[i]),
-                        sl=round(sl, spec.digits),
-                        tp=round(tp, spec.digits),
-                        stop_distance=stop_distance,
-                        risk_pct=risk_pct,
-                        atr=float(a),
-                        regime=str(regime[i - 1]),
-                        spread_cost_entry=abs(entry - mid) * vol * contract,
-                        slip_cost_entry=cost.slippage_points * spec.point * vol * contract,
-                        best=entry,
+                    last_entry = int(t[i])
+                    open_.append(
+                        _Open(
+                            side=side,
+                            volume=vol,
+                            entry_price=entry,
+                            entry_time=int(t[i]),
+                            sl=round(sl, spec.digits),
+                            tp=round(tp, spec.digits),
+                            stop_distance=stop_distance,
+                            risk_pct=risk_pct,
+                            atr=float(a),
+                            regime=str(regime[i - 1]),
+                            spread_cost_entry=abs(entry - mid) * vol * contract,
+                            slip_cost_entry=cost.slippage_points * spec.point * vol * contract,
+                            best=entry,
+                        )
                     )
             else:
                 reject(why)
         pending = 0
 
-        # 2. manage the open position on this bar
-        if pos is not None:
+        # 2. manage every open position on this bar
+        for pos in list(open_):
             pos.bars_held += 1
             if state in (
                 SessionState.PRE_BREAK_BUFFER,
@@ -344,7 +364,8 @@ def run_backtest(
                 SessionState.CLOSED,
                 SessionState.STALE,
             ):
-                close_position(i, cost.exit_price(pos.side, bo[i], ao[i], spec), "session_flatten")
+                px = cost.exit_price(pos.side, bo[i], ao[i], spec)
+                close_position(i, pos, px, "session_flatten")
             else:
                 if pos.side == "long":
                     hit_sl = bl[i] <= pos.sl
@@ -354,9 +375,9 @@ def run_backtest(
                         why = (
                             "trail" if pos.trailing else "breakeven" if pos.at_breakeven else "stop"
                         )
-                        close_position(i, px - cost.slippage_points * spec.point, why)
+                        close_position(i, pos, px - cost.slippage_points * spec.point, why)
                     elif hit_tp:
-                        close_position(i, pos.tp, "target")
+                        close_position(i, pos, pos.tp, "target")
                 else:
                     hit_sl = ah[i] >= pos.sl
                     hit_tp = al[i] <= pos.tp
@@ -365,10 +386,10 @@ def run_backtest(
                         why = (
                             "trail" if pos.trailing else "breakeven" if pos.at_breakeven else "stop"
                         )
-                        close_position(i, px + cost.slippage_points * spec.point, why)
+                        close_position(i, pos, px + cost.slippage_points * spec.point, why)
                     elif hit_tp:
-                        close_position(i, pos.tp, "target")
-            if pos is not None and trail_atr is not None:
+                        close_position(i, pos, pos.tp, "target")
+            if pos in open_ and trail_atr is not None:
                 # the bar survived; its extreme can pull the stop along for the next bar
                 if pos.side == "long":
                     pos.best = max(pos.best, bh[i])
@@ -382,7 +403,7 @@ def run_backtest(
                     new_sl = round(pos.best + trail_atr * pos.atr, spec.digits)
                     if gain >= trail_after_r * pos.stop_distance and new_sl < pos.sl:
                         pos.sl, pos.trailing = new_sl, True
-            if pos is not None and breakeven_at_r is not None and not pos.at_breakeven:
+            if pos in open_ and breakeven_at_r is not None and not pos.at_breakeven:
                 # the bar survived its stop and target; if it reached the trigger, the stop
                 # sits at the entry price from the next bar on
                 trigger = breakeven_at_r * pos.stop_distance
@@ -393,28 +414,37 @@ def run_backtest(
 
         # 3. mark equity, check drawdown kill switch
         floating = 0.0
-        if pos is not None:
+        for pos in open_:
             px = bc[i] if pos.side == "long" else ac[i]
             direction = 1.0 if pos.side == "long" else -1.0
-            floating = direction * (px - pos.entry_price) * pos.volume * spec.trade_contract_size
+            floating += direction * (px - pos.entry_price) * pos.volume * spec.trade_contract_size
         marked = equity + floating
         equity_curve[i] = marked
         peak = max(peak, marked)
         if killed_at is None and peak > 0 and (peak - marked) / peak * 100.0 >= r.max_drawdown_pct:
             killed_at = datetime.fromtimestamp(int(t[i]), UTC)
-            if pos is not None:
-                close_position(i, cost.exit_price(pos.side, bc[i], ac[i], spec), "kill_switch")
+            for pos in list(open_):
+                px = cost.exit_price(pos.side, bc[i], ac[i], spec)
+                close_position(i, pos, px, "kill_switch")
                 equity_curve[i] = equity
 
         # 4. decide the next entry from this bar's signal (acted on at bar i+1 open)
-        if killed_at is None and pos is None and i + 1 < n and sig.side[i] != 0:
-            pending = int(sig.side[i])
-        elif pos is not None and on_opposite != "hold" and i + 1 < n and sig.side[i] != 0:
-            if (sig.side[i] > 0) != (pos.side == "long"):
-                flip = int(sig.side[i])
+        s_i = int(sig.side[i]) if i + 1 < n else 0
+        if s_i != 0:
+            against = any((s_i > 0) != (p.side == "long") for p in open_)
+            if against and on_opposite != "hold":
+                flip = s_i
+            elif killed_at is None and len(open_) < max_positions:
+                if against and stack == "same_side":
+                    reject("opposite_side_open")
+                elif open_ and t[i + 1] - last_entry < entry_gap_min * 60:
+                    reject("entry_gap")
+                else:
+                    pending = s_i
 
-    if pos is not None:  # end of data: close at last close (reported as 'end_of_data')
-        close_position(n - 1, cost.exit_price(pos.side, bc[-1], ac[-1], spec), "end_of_data")
+    for pos in list(open_):  # end of data: close at last close (reported as 'end_of_data')
+        px = cost.exit_price(pos.side, bc[-1], ac[-1], spec)
+        close_position(n - 1, pos, px, "end_of_data")
         equity_curve[-1] = equity
 
     idx = pd.to_datetime(t, unit="s", utc=True)
