@@ -103,6 +103,93 @@ def simulate(
     return None
 
 
+OPINIONS = ("agree", "low_confidence", "wait", "unavailable")
+
+
+def ai_opinion(conn: sqlite3.Connection, at_ms: int) -> str:
+    """What the Strategy agent itself said in the decision made at `at_ms`, whatever happened to
+    the signal afterwards (on the demo account the rule's signals are taken without it, D-068):
+    `agree` (it proposed the entry and cleared the confidence bar), `low_confidence` (it proposed
+    the entry under the bar), `wait`, or `unavailable` (no answer, or a degraded one)."""
+    p = conn.execute(
+        "SELECT bot, action, gate_reason FROM proposals WHERE bot LIKE 'strategy%' "
+        "AND created_ms BETWEEN ? AND ? ORDER BY ABS(created_ms - ?) LIMIT 1",
+        (at_ms - 60_000, at_ms + 5_000, at_ms),
+    ).fetchone()
+    if p is None or p["bot"] != "strategy":
+        return "unavailable"
+    if p["action"] != "enter":
+        return "wait"
+    return "low_confidence" if (p["gate_reason"] or "").startswith("confidence") else "agree"
+
+
+def _bucket() -> dict[str, dict[str, Any]]:
+    return {k: {"n": 0, "wins": 0, "sum_r": 0.0, "net_usd": 0.0} for k in OPINIONS}
+
+
+def _close(b: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    for st in b.values():
+        st["sum_r"], st["net_usd"] = round(st["sum_r"], 3), round(st["net_usd"], 2)
+        st["mean_r"] = round(st["sum_r"] / st["n"], 3) if st["n"] else None
+    return b
+
+
+def by_ai_opinion(
+    conn: sqlite3.Connection, rows: list, simulate_one: Any, account_trades: bool = True
+) -> dict[str, Any]:
+    """The question for going live (D-082): would trading only when the agent agrees have been
+    better than taking every signal of the rule?
+
+    `real`: every closed trade of the account, with its real result, grouped by what the agent
+    said when it was opened. `replay`: every signal the rule gave, taken one position at a time as
+    code alone would (a signal that arrives while the previous one is still open is skipped, and
+    so is one a code rule other than "a position is already open" refused), grouped the same way.
+    The replay has no trailing stop and no costs beyond the spread, so compare its groups with
+    each other, not with the real trades."""
+    real = _bucket()
+    if account_trades:
+        for t in conn.execute(
+            "SELECT t.net_pnl, t.r_multiple, p.created_ms FROM trades t "
+            "JOIN proposals p ON p.proposal_id = t.proposal_id ORDER BY t.exit_ms"
+        ):
+            st = real[ai_opinion(conn, int(t["created_ms"]))]
+            r = float(t["r_multiple"] or 0.0)
+            st["n"] += 1
+            st["wins"] += 1 if t["net_pnl"] > 0 else 0
+            st["sum_r"] += r
+            st["net_usd"] += float(t["net_pnl"])
+    replay = _bucket()
+    busy_until = 0
+    overlap = blocked = unresolved = 0
+    for row in rows:
+        at_s = int(row["at_ms"]) // 1000
+        if at_s < busy_until:
+            overlap += 1
+            continue
+        try:
+            steps = json.loads(row["steps_json"] or "[]")
+        except ValueError:
+            steps = []
+        probe = next((s for s in steps if s.get("step") == "code_only"), None)
+        if probe is not None and not probe.get("ok") and probe.get("reason") != "max_positions":
+            blocked += 1
+            continue
+        out = simulate_one(row)
+        if out is None:
+            unresolved += 1
+            continue
+        busy_until = int(out["exit_s"])
+        st = replay[ai_opinion(conn, int(row["at_ms"]))]
+        st["n"] += 1
+        st["wins"] += 1 if out["r"] > 0 else 0
+        st["sum_r"] += out["r"]
+    return {
+        "real": _close(real),
+        "replay": _close(replay),
+        "replay_skipped": {"position_open": overlap, "code_rule": blocked, "open": unresolved},
+    }
+
+
 def build(
     conn: sqlite3.Connection, cfg: Config, strat: StrategyConfig, now_ms: int
 ) -> dict[str, Any]:
@@ -110,13 +197,14 @@ def build(
     stop_atr = min(max(float(strat.params.get("stop_atr", 1.0)), r.stop_atr_min), r.stop_atr_max)
     target_atr = max(float(strat.params.get("target_atr", 1.5)), stop_atr * r.min_reward_risk)
     rows = conn.execute(
-        "SELECT s.cycle_id, s.at_ms, s.signal_side, s.atr, c.status, c.gate_reason "
+        "SELECT s.cycle_id, s.at_ms, s.signal_side, s.atr, c.status, c.gate_reason, c.steps_json "
         "FROM decision_snapshots s JOIN brain_cycles c ON c.cycle_id = s.cycle_id "
         "WHERE s.signal_side != 0 AND c.status != 'running' ORDER BY s.at_ms"
     ).fetchall()
     total = conn.execute("SELECT COUNT(*), MIN(at_ms) FROM decision_snapshots").fetchone()
     stats = {k: {"n": 0, "resolved": 0, "wins": 0, "sum_r": 0.0} for k in CLASSES}
     cases: list[dict[str, Any]] = []
+    opinion: dict[str, Any] = by_ai_opinion(conn, [], lambda _r: None)
     if rows:
         repo = Repo(conn)
         start_s = int(rows[0]["at_ms"]) // 1000
@@ -128,6 +216,20 @@ def build(
         except Exception:  # noqa: BLE001
             events = []
         clock = SessionClock(cfg.session)
+
+        def one(row):
+            return simulate(
+                int(row["signal_side"]),
+                int(row["at_ms"]) // 1000,
+                row["atr"],
+                bars,
+                stop_atr,
+                target_atr,
+                clock,
+                events,
+            )
+
+        opinion = by_ai_opinion(conn, rows, one)
         for row in rows:
             cls = classify(row["status"], row["gate_reason"])
             st = stats[cls]
@@ -171,6 +273,24 @@ def build(
         )
         if veto["resolved"] < MIN_FOR_VERDICT:
             verdict += f" Too few to judge (under {MIN_FOR_VERDICT})."
+    value_r = round(-veto["sum_r"], 3) if veto["resolved"] else None
+    rp = opinion["replay"]
+    declined_n = rp["wait"]["n"] + rp["low_confidence"]["n"]
+    if declined_n + rp["agree"]["n"] > 0:
+        # The class counts above see one signal in several decisions and replay each as if no
+        # position were open. Where the agent's own answers are on record, the headline counts
+        # every signal once, one position at a time (D-082).
+        declined_r = rp["wait"]["sum_r"] + rp["low_confidence"]["sum_r"]
+        value_r = round(-declined_r, 3)
+        verdict = (
+            f"Counting each signal once, one position at a time: the Strategy agent declined "
+            f"{declined_n} signal(s) that would have made {declined_r:+.2f} R in total as "
+            f"code-only trades, so its vetoes {'saved' if declined_r <= 0 else 'cost'} "
+            f"{abs(declined_r):.2f} R. It agreed with {rp['agree']['n']} that made "
+            f"{rp['agree']['sum_r']:+.2f} R."
+        )
+        if declined_n < MIN_FOR_VERDICT:
+            verdict += f" Too few to judge (under {MIN_FOR_VERDICT})."
     return {
         "at_ms": now_ms,
         "strategy": strat.id,
@@ -180,8 +300,9 @@ def build(
         "since_ms": total[1],
         "signals": len(rows),
         "classes": stats,
-        "veto_value_r": round(-veto["sum_r"], 3) if veto["resolved"] else None,
+        "veto_value_r": value_r,
         "verdict": verdict,
+        "by_ai_opinion": opinion,
         "cases": cases[-30:][::-1],
     }
 

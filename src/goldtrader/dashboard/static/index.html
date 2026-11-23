@@ -276,7 +276,7 @@ footer{color:var(--dim);font-size:12px;padding:6px 2px 20px}
   <section class="grid g-live">
     <div class="card">
       <h2>Do the AI vetoes help?</h2>
-      <div class="tm-note">Each time the strategy's rule wanted a trade, this records what happened to it and plays it forward as a code-only trade. R means multiples of the amount risked. If vetoed signals would have lost, the vetoes are worth their cost.</div>
+      <div class="tm-note">Each time the strategy's rule wanted a trade, this records what the Strategy agent said and plays the signal forward as a code-only trade, counting each signal once and one position at a time. "Real trades" are this account's own closed trades. R means multiples of the amount risked. If the signals the agent declined would have lost, its vetoes are worth their cost.</div>
       <div id="vetoHead" style="font-size:13px"></div>
       <div class="tm-cards" id="vetoCards"></div>
       <div class="scroll" id="vetoCases" style="max-height:220px"></div>
@@ -562,7 +562,18 @@ function renderVeto(s) {
   const v = s.veto, cards = $("vetoCards"), cases = $("vetoCases"); clear(cards); clear(cases);
   if (!v) { $("vetoHead").textContent = "No report yet. It is refreshed every 15 minutes once decisions are being recorded."; return; }
   $("vetoHead").textContent = v.verdict + "  (" + v.decisions_recorded + " decisions recorded since " + (v.since_ms ? dayHm(v.since_ms) : "–") + ", " + v.signals + " with a signal)";
-  for (const [k, name] of [["taken", "Taken"], ["ai_veto", "Vetoed by AI"], ["code_block", "Blocked by code"], ["ai_down", "AI unavailable"]]) {
+  const op = v.by_ai_opinion;
+  if (op) {
+    // each signal counted once, grouped by what the Strategy agent itself said (D-082)
+    const sg = x => (x >= 0 ? "+" : "") + x.toFixed(2);
+    for (const [k, name] of [["agree", "AI agreed"], ["low_confidence", "AI unsure"], ["wait", "AI said wait"], ["unavailable", "AI unavailable"]]) {
+      const r = op.real[k], p = op.replay[k];
+      if (!r.n && !p.n) continue;
+      tmCard(cards, name + ": real trades", String(r.n), "", r.n ? r.wins + " won, net " + sg(r.net_usd) + " USD" : "none yet");
+      tmCard(cards, name + ": every signal", p.n ? sg(p.sum_r) + " R" : "–", p.sum_r > 0 ? "up" : p.sum_r < 0 ? "down" : "", p.n + " signals replayed, " + p.wins + " won, no trailing stop");
+    }
+  }
+  for (const [k, name] of op ? [] : [["taken", "Taken"], ["ai_veto", "Vetoed by AI"], ["code_block", "Blocked by code"], ["ai_down", "AI unavailable"]]) {
     const c = v.classes[k];
     tmCard(cards, name, String(c.n), "", c.resolved ? c.resolved + " played out, " + c.wins + " would have won" : "none played out yet");
     if (c.resolved) tmCard(cards, name + ": result", (c.sum_r >= 0 ? "+" : "") + c.sum_r.toFixed(2) + " R", c.sum_r > 0 ? "up" : c.sum_r < 0 ? "down" : "", "as code-only trades");

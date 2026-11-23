@@ -961,6 +961,35 @@ def veto_report(
             f"{c['wins']:>3} would have won, total {c['sum_r']:+.2f} R, mean {mean} R"
         )
     typer.echo(rep["verdict"])
+    op = rep["by_ai_opinion"]
+    labels = {
+        "agree": "AI agreed",
+        "low_confidence": "AI unsure",
+        "wait": "AI said wait",
+        "unavailable": "AI unavailable",
+    }
+    typer.echo("")
+    typer.echo("Real trades of this account, by what the Strategy agent said when each was opened:")
+    for key, label in labels.items():
+        g = op["real"][key]
+        mean = "n/a" if g["mean_r"] is None else f"{g['mean_r']:+.2f}"
+        typer.echo(
+            f"  {label:<15} {g['n']:>4} trades, {g['wins']:>3} won, net {g['net_usd']:+9.2f} USD, "
+            f"total {g['sum_r']:+.2f} R, mean {mean} R"
+        )
+    sk = op["replay_skipped"]
+    typer.echo(
+        "Every signal of the rule, one position at a time, no trailing stop (replayed on stored "
+        f"prices; skipped: {sk['position_open']} while a position was open, {sk['code_rule']} "
+        f"refused by a code rule, {sk['open']} not finished):"
+    )
+    for key, label in labels.items():
+        g = op["replay"][key]
+        mean = "n/a" if g["mean_r"] is None else f"{g['mean_r']:+.2f}"
+        typer.echo(
+            f"  {label:<15} {g['n']:>4} signals, {g['wins']:>3} won, total {g['sum_r']:+.2f} R, "
+            f"mean {mean} R"
+        )
 
 
 def _signal_api() -> tuple[int, str]:

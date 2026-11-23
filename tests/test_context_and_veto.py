@@ -208,3 +208,73 @@ def test_telegram_tries_every_address_and_remembers_the_family_that_worked(monke
         tg._open_tls("api.telegram.org", time.monotonic() + 5)
     with pytest.raises(TimeoutError):
         tg._open_tls("api.telegram.org", time.monotonic() - 1)
+
+
+def test_veto_report_by_ai_opinion_counts_each_signal_once_and_real_trades():
+    cfg = load_config("config/demo.yaml")
+    conn = connect(None)
+    migrate(conn)
+    strat = cfg.strategies[0].model_copy(update={"params": {"stop_atr": 1.0, "target_atr": 1.5}})
+    t0 = int(datetime(2026, 11, 17, 12, tzinfo=UTC).timestamp())
+    for i in range(1, 120):  # price falls: a long is stopped within a few minutes, a short wins
+        px = 4000.0 - 0.3 * i
+        conn.execute(
+            "INSERT INTO bars VALUES (?,60,?,?,?,?,?,?,?,?,?,1,'t')",
+            (cfg.account.symbol, t0 + 60 * i, px, px + 0.2, px - 0.4, px, px + 0.2, px + 0.4)
+            + (px - 0.2, px + 0.2),
+        )
+    z = zlib.compress(b"{}")
+    taken = '[{"step": "code_only", "ok": true, "reason": "enter"}]'
+    full = '[{"step": "code_only", "ok": false, "reason": "max_positions"}]'
+    spread = '[{"step": "code_only", "ok": false, "reason": "spread_above_cap"}]'
+
+    def cycle(cid, at_s, side, steps, action, gate_reason):
+        at = at_s * 1000
+        conn.execute(
+            "INSERT INTO decision_snapshots VALUES (?,?,?,?,?,?,?)",
+            (cid, at, side, 4000.0, 4000.2, 1.0, z),
+        )
+        conn.execute(
+            "INSERT INTO brain_cycles VALUES (?,?,?,'wait',?,'wait',70,?)",
+            (cid, at, at + 5, f"s{cid}", steps),
+        )
+        conn.execute(
+            "INSERT INTO proposals(proposal_id, created_ms, bot, action, raw_json, gate_status, "
+            "gate_reason) VALUES (?,?,'strategy',?,'{}','x',?)",
+            (f"s{cid}", at, action, gate_reason),
+        )
+
+    cycle("a", t0, 1, taken, "wait", "wait")  # the agent waits; the long loses 1 R
+    cycle("b", t0 + 30, 1, full, "wait", "wait")  # same flip seen again: position open, skipped
+    cycle("c", t0 + 1800, -1, taken, "enter", "max_positions")  # the agent agrees; the short wins
+    cycle("d", t0 + 5400, -1, spread, "enter", "confidence_0.50")  # a code rule refused it
+    # one real trade, opened by the code-only path while the agent said wait
+    conn.execute(
+        "INSERT INTO proposals(proposal_id, created_ms, bot, action, raw_json, gate_status, "
+        "gate_reason) VALUES ('co1',?,'code_only','enter','{}','sent','executed')",
+        (t0 * 1000,),
+    )
+    conn.execute(
+        "INSERT INTO trades(trade_id, proposal_id, side, volume, entry_ms, exit_ms, entry_price, "
+        "exit_price, gross_pnl, spread_cost, slippage_cost, commission, swap, net_pnl, r_multiple, "
+        "exit_reason) VALUES ('t1','co1','long',0.01,?,?,4000,3990,-10,0,0,0,0,-10,-1.0,'stop')",
+        (t0 * 1000, t0 * 1000 + 600_000),
+    )
+    rep = veto.build(conn, cfg, strat, (t0 + 3 * 3600) * 1000)
+    json.dumps(rep)
+    op = rep["by_ai_opinion"]
+    assert op["replay"]["wait"] == {
+        "n": 1,
+        "wins": 0,
+        "sum_r": -1.0,
+        "net_usd": 0.0,
+        "mean_r": -1.0,
+    }
+    assert op["replay"]["agree"]["n"] == 1 and op["replay"]["agree"]["sum_r"] == 1.5
+    assert op["replay_skipped"] == {"position_open": 1, "code_rule": 1, "open": 0}
+    assert op["real"]["wait"]["n"] == 1 and op["real"]["wait"]["net_usd"] == -10.0
+    assert op["real"]["agree"]["n"] == 0
+    assert rep["veto_value_r"] == 1.0 and "each signal once" in rep["verdict"]
+    assert "saved 1.00 R" in rep["verdict"] and "Too few" in rep["verdict"]
+    assert veto.ai_opinion(conn, (t0 + 5400) * 1000) == "low_confidence"
+    assert veto.ai_opinion(conn, (t0 + 99_999) * 1000) == "unavailable"
