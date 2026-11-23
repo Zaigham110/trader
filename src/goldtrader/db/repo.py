@@ -77,6 +77,22 @@ class Repo:
             ),
         )
 
+    def equity_at(self, login: int, at_ms: int, max_age_ms: int = 4 * 86_400_000) -> float | None:
+        """The account's equity at ``at_ms`` from the stored snapshots: the last one at or before
+        it (not older than ``max_age_ms``, which covers a weekend), else the first one after it."""
+        row = self.c.execute(
+            "SELECT equity FROM account_snapshots WHERE login=? AND read_ms<=? AND read_ms>=? "
+            "ORDER BY read_ms DESC LIMIT 1",
+            (login, at_ms, at_ms - max_age_ms),
+        ).fetchone()
+        if row is None:
+            row = self.c.execute(
+                "SELECT equity FROM account_snapshots WHERE login=? AND read_ms>? "
+                "ORDER BY read_ms LIMIT 1",
+                (login, at_ms),
+            ).fetchone()
+        return float(row[0]) if row is not None and row[0] else None
+
     # --- bars ---------------------------------------------------------------------------
     def upsert_bars(self, symbol: str, bars: Iterable[Bar], source: str) -> int:
         rows = [

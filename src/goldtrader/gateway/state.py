@@ -46,8 +46,7 @@ class PnLTracker:
     cooldown_until_ms: int = 0
 
     def roll(self, now_s: int, equity: float) -> None:
-        day = now_s // 86400
-        week = (now_s + 3 * 86400) // (7 * 86400)
+        day, week = self.keys(now_s)
         if self.day_key != day:
             self.day_key, self.start_equity_day = day, equity
         if self.week_key != week:
@@ -55,6 +54,20 @@ class PnLTracker:
         if self.live_start_equity <= 0:
             self.live_start_equity = equity
         self.equity_peak = max(self.equity_peak, equity)
+
+    @staticmethod
+    def keys(now_s: int) -> tuple[int, int]:
+        """(day, week) numbers; a week starts Monday 00:00 UTC."""
+        return now_s // 86400, (now_s + 3 * 86400) // (7 * 86400)
+
+    def seed(self, now_s: int, day_equity: float | None, week_equity: float | None) -> None:
+        """Set the day/week baselines from stored history, so a restart does not move them (D-077).
+        A missing value is left for `roll` to take from the current equity."""
+        day, week = self.keys(now_s)
+        if day_equity and day_equity > 0:
+            self.day_key, self.start_equity_day = day, day_equity
+        if week_equity and week_equity > 0:
+            self.week_key, self.start_equity_week = week, week_equity
 
     def note_order(self, now_ms: int) -> None:
         self.orders_ms.append(now_ms)

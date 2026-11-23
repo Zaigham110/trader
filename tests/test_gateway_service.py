@@ -271,3 +271,35 @@ def test_trailing_stop_mirrors_for_a_short_and_is_off_by_default():
         assert client.positions_get()[0].sl == pos.sl and svc.counters.stop_trails == 0
     finally:
         svc.stop()
+
+
+def test_restart_keeps_the_day_and_week_pnl_baselines():
+    svc, client, clock, repo = _service()
+    try:
+        equity = client.account_info().equity
+        assert svc.view().day_pnl == 0.0  # no history: counted from the first step
+        # stored history: equity was 60 lower at Monday 00:00 UTC and 40 lower at today's 00:00
+        day_ms = clock.ms - clock.ms % 86_400_000
+        for at_ms, eq in (
+            (day_ms - 86_400_000 - 5_000, equity - 60.0),
+            (day_ms - 5_000, equity - 40.0),
+        ):
+            repo.record_account(client.account_info())
+            rid = repo.c.execute("SELECT max(id) FROM account_snapshots").fetchone()[0]
+            repo.c.execute(
+                "UPDATE account_snapshots SET read_ms=?, equity=? WHERE id=?", (at_ms, eq, rid)
+            )
+        again = GatewayService(
+            client, svc.cfg, repo, clock_ms=clock, token="t" * 32, port=0, start_api=False
+        )
+        again.start()
+        acct = again._snapshot.account
+        assert acct.day_pnl == 40.0 and acct.week_pnl == 60.0
+        assert acct.start_equity_day == equity - 40.0
+        # the next day still rolls to that day's own start
+        clock.advance(86_400)
+        again.step()
+        assert again._snapshot.account.day_pnl == 0.0
+        assert again._snapshot.account.week_pnl == 60.0
+    finally:
+        svc.stop()

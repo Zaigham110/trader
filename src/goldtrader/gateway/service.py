@@ -131,8 +131,27 @@ class GatewayService:
                 self.token, self.view, self.handle_intent, self.health, port=self.port
             )
             self.api.start()
+        self._seed_pnl()
         self.started = True
         self.step()
+
+    def _seed_pnl(self) -> None:
+        """Day and week P&L (and so the daily and weekly loss limits) count from the start of the
+        day and week, not from the last restart (D-077): take both baselines from the stored
+        account snapshots. Never raises; without history `roll` uses the current equity."""
+        try:
+            acct = self.client.account_info()
+            if acct is None:
+                return
+            now_s = self.clock_ms() // 1000
+            day, week = PnLTracker.keys(now_s)
+            self.pnl.seed(
+                now_s,
+                self.repo.equity_at(acct.login, day * 86_400_000),
+                self.repo.equity_at(acct.login, (week * 7 - 3) * 86_400_000),
+            )
+        except Exception:  # noqa: BLE001
+            log.exception("could not restore the day/week P&L baselines")
 
     def stop(self) -> None:
         if self.api is not None:
