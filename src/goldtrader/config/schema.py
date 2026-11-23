@@ -151,6 +151,11 @@ class RiskLimits(Frozen):
     min_reward_risk: float = 1.0
     stop_atr_min: float = 0.3
     stop_atr_max: float = 1.5
+    # Trailing stop (D-076), applied by the gateway in code. Both are in units of the trade's
+    # original stop distance: once the trade has been `trail_after_r` of it in profit, the
+    # stop follows the best price at `trail_distance_r` of it. 0 distance = off.
+    trail_after_r: float = Field(default=2.0, ge=0.0, le=20.0)
+    trail_distance_r: float = Field(default=0.0, ge=0.0, le=5.0)
     consecutive_loss_pause: int = 3
     cooldown_min: int = 60
     min_margin_level_pct: float = 300.0

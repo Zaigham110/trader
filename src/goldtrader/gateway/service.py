@@ -46,6 +46,7 @@ class GatewayCounters:
     bars_closed: int = 0
     flattens: int = 0
     kills: int = 0
+    stop_trails: int = 0
     reconciles: int = 0
     last_reconcile_ms: int = 0
     last_heartbeat_ms: int = 0
@@ -84,6 +85,7 @@ class GatewayService:
         self._lock = threading.RLock()
         self.on_step = None  # called after every loop step (the watchdog's heartbeat, D-065)
         self._snapshot: Snapshot | None = None
+        self._trail_state: dict[int, dict] = {}  # per open position: best price, back-off
         self.api: GatewayAPI | None = None
         self.started = False
 
@@ -151,6 +153,7 @@ class GatewayService:
             "bars_closed": c.bars_closed,
             "flattens": c.flattens,
             "kills": c.kills,
+            "stop_trails": c.stop_trails,
             "reconciles": c.reconciles,
             "errors": c.errors,
             "last_error": c.last_error,
@@ -218,6 +221,8 @@ class GatewayService:
                     c.bars_closed += 1
                 snap = self._refresh()
                 if self._safety(snap, now):
+                    snap = self._refresh()
+                if self._trail(snap, now):
                     snap = self._refresh()
                 if now - c.last_heartbeat_ms >= 10_000:
                     self.repo.heartbeat(
@@ -295,6 +300,59 @@ class GatewayService:
                 acted = True
         else:
             c.disconnected_since_ms = None
+        return acted
+
+    def _trail(self, snap: Snapshot, now: int) -> bool:
+        """Trailing stop (D-076): once a trade has been `trail_after_r` x its original stop distance
+        in profit, keep the broker's stop `trail_distance_r` x that distance behind the best price
+        seen. Every move goes through `check_stop_move`, so a stop only ever moves toward profit.
+        Returns True when a stop was moved. Never raises: a trailing fault must not stop the loop."""
+        r = self.cfg.owner.risk
+        state = self._trail_state
+        if r.trail_distance_r <= 0 or not snap.positions:
+            state.clear()
+            return False
+        acted = False
+        try:
+            for pid in [k for k in state if k not in {p.ticket for p in snap.positions}]:
+                del state[pid]
+            for p in snap.positions:
+                st = state.get(p.ticket)
+                if st is None:
+                    row = self.repo.c.execute(
+                        "SELECT initial_stop FROM positions WHERE position_id=?", (p.ticket,)
+                    ).fetchone()
+                    initial = float(row[0]) if row and row[0] else 0.0
+                    st = state[p.ticket] = {
+                        "dist0": abs(p.price_open - initial) if initial > 0 else 0.0,
+                        "best": p.price_open,
+                        "wait_until": 0,
+                    }
+                long = p.side == "long"
+                px = snap.market.bid if long else snap.market.ask
+                if st["dist0"] <= 0 or p.sl <= 0 or not px or px <= 0:
+                    continue
+                st["best"] = max(st["best"], px) if long else min(st["best"], px)
+                gain = st["best"] - p.price_open if long else p.price_open - st["best"]
+                if gain < r.trail_after_r * st["dist0"] or now < st["wait_until"]:
+                    continue
+                trail = r.trail_distance_r * st["dist0"]
+                new = round(st["best"] - trail if long else st["best"] + trail, self.spec.digits)
+                better = new - p.sl if long else p.sl - new
+                if better < max(0.1 * trail, 10 * self.spec.point):
+                    continue  # not worth a broker request yet
+                res = self.engine.move_stop(
+                    p.ticket, new, snap.market, snap.ctx, intent_id=f"trail:{p.ticket}:{now}"
+                )
+                if res.status == "executed":
+                    self.counters.stop_trails += 1
+                    acted = True
+                else:
+                    st["wait_until"] = now + 60_000  # refused or failed: do not hammer the broker
+        except Exception as e:  # noqa: BLE001
+            self.counters.errors += 1
+            self.counters.last_error = f"trail: {type(e).__name__}: {e}"
+            log.exception("trailing stop failed")
         return acted
 
     def _recheck_spec(self) -> None:

@@ -35,3 +35,7 @@ owner:
     # D-073: stops up to 6 x the 1-minute ATR (was 1.5). At 0.01 lot that is about 11-16 USD
     # a losing trade, inside risk_per_trade_pct (25 USD on 5,000).
     stop_atr_max: 6.0
+    # D-076 trailing stop: once a trade is 2 x its stop distance in profit, the gateway keeps
+    # the stop 0.27 x that distance (1.5 of the rule's 5.5 x ATR) behind the best price.
+    trail_after_r: 2.0
+    trail_distance_r: 0.27

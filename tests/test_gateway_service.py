@@ -198,3 +198,76 @@ def test_step_survives_client_errors_and_disconnect():
         assert svc.step() is None and svc.counters.errors == 1 and "ipc" in svc.counters.last_error
     finally:
         svc.stop()
+
+
+def _open(svc, client, clock, side, k_target=8.0):
+    """Warm the market, open one position through the API and return (position, stop distance)."""
+    gw = GatewayClient(f"http://127.0.0.1:{svc.api.port}", svc.token)
+    for i in range(70):
+        _tick(client, clock, 4000.0 + 0.01 * (i % 3), 4000.2 + 0.01 * (i % 3))
+        svc.step()
+    atr = gw.state().atr
+    sign = 1 if side == "long" else -1
+    ref = 4000.2 if side == "long" else 4000.0
+    res = gw.send_intent(
+        Intent(
+            intent_id=f"t-{side}",
+            kind="enter",
+            created_ms=clock.ms,
+            side=side,
+            stop_price=round(ref - sign * 0.8 * atr, 2),
+            target_price=round(ref + sign * k_target * atr, 2),
+            bundle_id="b1",
+            proposal_id=f"p-{side}",
+        )
+    )
+    assert res.status == "executed", res
+    pos = client.positions_get()[0]
+    return pos, abs(pos.price_open - pos.sl)
+
+
+def test_trailing_stop_starts_late_follows_the_best_price_and_never_moves_back():
+    svc, client, clock, _ = _service({"trail_after_r": 2.0, "trail_distance_r": 0.25})
+    try:
+        pos, d = _open(svc, client, clock, "long")
+        entry, sl0 = pos.price_open, pos.sl
+
+        def at(bid):
+            _tick(client, clock, round(bid, 2), round(bid + 0.2, 2))
+            svc.step()
+            return client.positions_get()[0].sl
+
+        assert at(entry + 1.5 * d) == sl0  # not yet two stop-distances in profit
+        top = round(entry + 2.5 * d, 2)
+        sl1 = at(top)
+        assert sl1 == round(top - 0.25 * d, 2) and sl1 > entry  # profit is now locked in
+        assert at(top - 0.1 * d) == sl1  # a dip does not pull the stop back
+        assert at(top + 0.01 * d) == sl1  # nor is a tiny gain worth a broker request
+        top2 = round(entry + 3.0 * d, 2)
+        assert at(top2) == round(top2 - 0.25 * d, 2)
+        assert svc.health()["stop_trails"] == 2 and svc.counters.errors == 0
+    finally:
+        svc.stop()
+
+
+def test_trailing_stop_mirrors_for_a_short_and_is_off_by_default():
+    svc, client, clock, _ = _service({"trail_after_r": 2.0, "trail_distance_r": 0.25})
+    try:
+        pos, d = _open(svc, client, clock, "short")
+        low = round(pos.price_open - 2.5 * d, 2)
+        _tick(client, clock, round(low - 0.2, 2), low)  # the ask is what closes a short
+        svc.step()
+        sl = client.positions_get()[0].sl
+        assert sl == round(low + 0.25 * d, 2) and sl < pos.price_open
+    finally:
+        svc.stop()
+    svc, client, clock, _ = _service()
+    try:
+        pos, d = _open(svc, client, clock, "long")
+        _tick(
+            client, clock, round(pos.price_open + 3 * d, 2), round(pos.price_open + 3 * d + 0.2, 2)
+        )
+        svc.step()
+        assert client.positions_get()[0].sl == pos.sl and svc.counters.stop_trails == 0
+    finally:
+        svc.stop()
