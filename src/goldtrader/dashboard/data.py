@@ -771,3 +771,231 @@ def stored_report(conn: sqlite3.Connection, name: str) -> dict[str, Any] | None:
         return None
     r = conn.execute("SELECT body_json FROM stored_reports WHERE name=?", (name,)).fetchone()
     return _loads(r[0], None) if r else None
+
+
+# ----------------------------------------------------------------------- trades page (D-083)
+PERIODS = ("today", "week", "month", "all")
+R_BUCKETS: tuple[tuple[str, float, float], ...] = (
+    ("under -1", -1e9, -1.0),
+    ("-1 to -0.5", -1.0, -0.5),
+    ("-0.5 to 0", -0.5, 0.0),
+    ("0 to 0.5", 0.0, 0.5),
+    ("0.5 to 1", 0.5, 1.0),
+    ("1 to 2", 1.0, 2.0),
+    ("over 2", 2.0, 1e9),
+)
+WEEKDAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+
+
+def period_from_ms(period: str, now_ms: int) -> int:
+    if period in ("today", "week"):
+        return period_start_ms(period, now_ms)
+    if period == "month":
+        d = datetime.fromtimestamp(now_ms / 1000, tz=UTC)
+        return int(d.replace(day=1, hour=0, minute=0, second=0, microsecond=0).timestamp() * 1000)
+    return 0
+
+
+def ai_opinion(conn: sqlite3.Connection, at_ms: int | None) -> str:
+    """What the Strategy agent said in the decision made at `at_ms`: agree / low_confidence /
+    wait / unavailable. The same rule as `report/veto.py:ai_opinion` (not imported: this process
+    loads no trading code)."""
+    if at_ms is None:
+        return "unavailable"
+    p = conn.execute(
+        "SELECT bot, action, gate_reason FROM proposals WHERE bot LIKE 'strategy%' "
+        "AND created_ms BETWEEN ? AND ? ORDER BY ABS(created_ms - ?) LIMIT 1",
+        (at_ms - 60_000, at_ms + 5_000, at_ms),
+    ).fetchone()
+    if p is None or p["bot"] != "strategy":
+        return "unavailable"
+    if p["action"] != "enter":
+        return "wait"
+    return "low_confidence" if (p["gate_reason"] or "").startswith("confidence") else "agree"
+
+
+def _group(out: dict[str, dict[str, Any]], key: str, t: dict[str, Any]) -> None:
+    g = out.setdefault(key, {"n": 0, "wins": 0, "net": 0.0, "sum_r": 0.0})
+    g["n"] += 1
+    g["wins"] += 1 if t["net_pnl"] > 0 else 0
+    g["net"] = round(g["net"] + t["net_pnl"], 2)
+    g["sum_r"] = round(g["sum_r"] + (t["r_multiple"] or 0.0), 3)
+
+
+def trade_stats(ts: list[dict[str, Any]]) -> dict[str, Any]:
+    """Summary and breakdowns of closed trades given oldest first. Money is net of all costs."""
+    wins = [t["net_pnl"] for t in ts if t["net_pnl"] > 0]
+    losses = [t["net_pnl"] for t in ts if t["net_pnl"] <= 0]
+    rs = [t["r_multiple"] for t in ts if t["r_multiple"] is not None]
+    by: dict[str, dict[str, dict[str, Any]]] = {
+        k: {} for k in ("exit_reason", "hour", "weekday", "side", "ai")
+    }
+    hist = {name: 0 for name, _lo, _hi in R_BUCKETS}
+    curve: list[list[float]] = []
+    cum = peak = max_dd = 0.0
+    cost = {"spread": 0.0, "slippage": 0.0, "commission": 0.0, "swap": 0.0}
+    held = 0.0
+    for t in ts:
+        cum += t["net_pnl"]
+        peak = max(peak, cum)
+        max_dd = max(max_dd, peak - cum)
+        curve.append([t["exit_ms"], round(cum, 2), round(cum - peak, 2)])
+        entry = datetime.fromtimestamp(t["entry_ms"] / 1000, tz=UTC)
+        _group(by["exit_reason"], str(t["exit_reason"] or "unknown"), t)
+        _group(by["hour"], f"{entry.hour:02d}", t)
+        _group(by["weekday"], WEEKDAYS[entry.weekday()], t)
+        _group(by["side"], t["side"], t)
+        _group(by["ai"], t["ai"], t)
+        if t["r_multiple"] is not None:
+            for name, lo, hi in R_BUCKETS:
+                if lo <= t["r_multiple"] < hi:
+                    hist[name] += 1
+                    break
+        cost["spread"] += t["spread_cost"] or 0.0
+        cost["slippage"] += t["slippage_cost"] or 0.0
+        cost["commission"] += t["commission"] or 0.0
+        cost["swap"] += t["swap"] or 0.0
+        held += (t["exit_ms"] - t["entry_ms"]) / 60_000
+    n = len(ts)
+    cost = {k: round(v, 2) for k, v in cost.items()}
+    cost["total"] = round(cost["spread"] + cost["slippage"] + cost["commission"] - cost["swap"], 2)
+    return {
+        "n": n,
+        "wins": len(wins),
+        "losses": len(losses),
+        "hit_rate": round(len(wins) / n, 3) if n else None,
+        "net": round(sum(t["net_pnl"] for t in ts), 2),
+        "avg_win": round(sum(wins) / len(wins), 2) if wins else None,
+        "avg_loss": round(sum(losses) / len(losses), 2) if losses else None,
+        "profit_factor": round(sum(wins) / -sum(losses), 2) if wins and sum(losses) < 0 else None,
+        "expectancy_usd": round(sum(t["net_pnl"] for t in ts) / n, 2) if n else None,
+        "expectancy_r": round(sum(rs) / len(rs), 3) if rs else None,
+        "best": max((t["net_pnl"] for t in ts), default=None),
+        "worst": min((t["net_pnl"] for t in ts), default=None),
+        "max_drawdown_usd": round(max_dd, 2),
+        "avg_hold_min": round(held / n, 1) if n else None,
+        "costs": cost,
+        "curve": curve,
+        "by": by,
+        "r_hist": [[name, hist[name]] for name, _lo, _hi in R_BUCKETS],
+    }
+
+
+def trades_page(conn: sqlite3.Connection, now_ms: int, period: str = "all") -> dict[str, Any]:
+    """Every closed trade of the period with the Strategy agent's opinion at entry, and the
+    statistics of the period. At most the latest 2,000 trades."""
+    if period not in PERIODS:
+        period = "all"
+    ts = rows(
+        conn.execute(
+            "SELECT t.trade_id, t.position_id, t.bundle_id, t.side, t.volume, t.entry_ms, "
+            "t.exit_ms, t.entry_price, t.exit_price, t.gross_pnl, t.spread_cost, t.slippage_cost, "
+            "t.commission, t.swap, t.net_pnl, t.r_multiple, t.exit_reason, t.risk_pct_of_equity, "
+            "p.created_ms AS decided_ms, p.bot AS opened_by FROM trades t "
+            "LEFT JOIN proposals p ON p.proposal_id = t.proposal_id "
+            "WHERE t.exit_ms >= ? ORDER BY t.exit_ms DESC LIMIT 2000",
+            (period_from_ms(period, now_ms),),
+        )
+    )[::-1]
+    for t in ts:
+        t["ai"] = ai_opinion(conn, t["decided_ms"])
+    return {"period": period, "now_ms": now_ms, "stats": trade_stats(ts), "trades": ts[::-1]}
+
+
+def trade_detail(conn: sqlite3.Connection, symbol: str, trade_id: str) -> dict[str, Any] | None:
+    """One closed trade end to end: the decision that opened it, every order request with its
+    slippage, the stop's moves, the price around it, and how far it went for and against."""
+    t = _one(conn, "SELECT * FROM trades WHERE trade_id=?", (trade_id,))
+    if t is None:
+        return None
+    pos = _one(conn, "SELECT * FROM positions WHERE position_id=?", (t["position_id"],)) or {}
+    opened = _one(
+        conn,
+        "SELECT proposal_id, created_ms, bot, action, side, stop_atr, target_atr, confidence, "
+        "thesis, gate_status, gate_reason FROM proposals WHERE proposal_id=?",
+        (t["proposal_id"],),
+    )
+    at = opened["created_ms"] if opened else None
+    agent = None
+    cycle = None
+    if at is not None:
+        agent = _one(
+            conn,
+            "SELECT created_ms, bot, action, side, confidence, thesis, invalidation, gate_reason "
+            "FROM proposals WHERE bot LIKE 'strategy%' AND created_ms BETWEEN ? AND ? "
+            "ORDER BY ABS(created_ms - ?) LIMIT 1",
+            (at - 60_000, at + 5_000, at),
+        )
+        c = _one(
+            conn,
+            "SELECT cycle_id, started_ms, finished_ms, status, gate_reason, risk_budget, "
+            "steps_json FROM brain_cycles WHERE started_ms BETWEEN ? AND ? "
+            "ORDER BY ABS(started_ms - ?) LIMIT 1",
+            (at - 5_000, at + 5_000, at),
+        )
+        if c is not None:
+            c["steps"] = _loads(c.pop("steps_json"), [])
+            cycle = c
+    orders: list[dict[str, Any]] = []
+    stops: list[list[float]] = []
+    if pos.get("initial_stop"):
+        stops.append([t["entry_ms"], pos["initial_stop"]])
+    for o in conn.execute(
+        "SELECT sent_ms, kind, stage, retcode, risk_code, requested_price, filled_price, "
+        "slippage_points, volume, request_json, intent_id FROM order_attempts "
+        "WHERE position_id=? OR (intent_id IS NOT NULL AND intent_id=?) ORDER BY sent_ms, id",
+        (t["position_id"], pos.get("intent_id")),
+    ):
+        o = dict(o)
+        req = _loads(o.pop("request_json"), {})
+        o["sl"] = req.get("sl") or None
+        o["trail"] = str(o.pop("intent_id") or "").startswith("trail:")
+        orders.append(o)
+        if o["kind"] == "sltp" and o["retcode"] == 10009 and o["sl"]:
+            stops.append([o["sent_ms"], o["sl"]])
+    lo_s, hi_s = t["entry_ms"] // 1000 - 2700, t["exit_ms"] // 1000 + 1800
+    raw = conn.execute(
+        "SELECT time_s, bid_open, bid_high, bid_low, bid_close, ask_high, ask_low FROM bars "
+        "WHERE symbol=? AND seconds=60 AND time_s BETWEEN ? AND ? ORDER BY time_s",
+        (symbol, lo_s, hi_s),
+    ).fetchall()
+    span = next((m for m in TIMEFRAMES if len(raw) / m <= 600), 60) * 60
+    candles: list[list[float]] = []
+    best = worst = 0.0
+    long_ = t["side"] == "long"
+    for r in raw:
+        k = r[0] - r[0] % span
+        if candles and candles[-1][0] == k:
+            c2 = candles[-1]
+            c2[2], c2[3], c2[4] = max(c2[2], r[2]), min(c2[3], r[3]), r[4]
+        else:
+            candles.append([k, r[1], r[2], r[3], r[4]])
+        if t["entry_ms"] // 1000 <= r[0] <= t["exit_ms"] // 1000:
+            if long_:
+                best = max(best, r[2] - t["entry_price"])
+                worst = max(worst, t["entry_price"] - r[3])
+            else:
+                best = max(best, t["entry_price"] - r[6])
+                worst = max(worst, r[5] - t["entry_price"])
+    dist = abs(t["entry_price"] - pos["initial_stop"]) if pos.get("initial_stop") else None
+    return {
+        "trade": t,
+        "position": {
+            k: pos.get(k) for k in ("initial_stop", "sl", "tp", "risk_pct", "risk_usd", "source")
+        },
+        "ai": ai_opinion(conn, at),
+        "opened_by": opened,
+        "agent": agent,
+        "cycle": cycle,
+        "orders": orders,
+        "stops": stops,
+        "candles": candles,
+        "candle_minutes": span // 60,
+        "excursion": {
+            "mfe": round(best, 3),
+            "mae": round(worst, 3),
+            "mfe_r": round(best / dist, 2) if dist else None,
+            "mae_r": round(worst / dist, 2) if dist else None,
+            "stop_distance": round(dist, 3) if dist else None,
+        },
+    }

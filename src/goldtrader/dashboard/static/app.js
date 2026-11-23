@@ -69,5 +69,4 @@ document.addEventListener("mouseout", e => {
 });
 document.getElementById("themeBtn").addEventListener("click", () => gtTheme(true));
 window.addEventListener("hashchange", () => gtShow(location.hash.slice(1)));
-gtTheme(false);
-gtShow(location.hash.slice(1) || "overview");
+function gtBoot() { gtTheme(false); gtShow(location.hash.slice(1) || "overview"); }

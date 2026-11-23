@@ -36,6 +36,7 @@ ASSETS: dict[str, tuple[str, str]] = {
     "/app.css": ("app.css", "text/css; charset=utf-8"),
     "/app.js": ("app.js", "text/javascript; charset=utf-8"),
     "/legacy.js": ("legacy.js", "text/javascript; charset=utf-8"),
+    "/pages.js": ("pages.js", "text/javascript; charset=utf-8"),
     "/vendor/lightweight-charts.js": (
         "vendor/lightweight-charts.standalone.production.js",
         "text/javascript; charset=utf-8",
@@ -180,6 +181,16 @@ class DashboardServer:
                                 return self._json(404, {"error": "not_found"})
                             return self._json(200, one)
                         return self._json(200, srv.timemachine_list())
+                    if url.path == "/api/trades":
+                        q = parse_qs(url.query)
+                        return self._json(200, srv.read(data.trades_page, _str(q, "period", "all")))
+                    if url.path == "/api/trade":
+                        one = srv.read_symbol(
+                            data.trade_detail, _str(parse_qs(url.query), "id", "")
+                        )
+                        if one is None:
+                            return self._json(404, {"error": "not_found"})
+                        return self._json(200, one)
                     if url.path == "/api/bars":
                         q = parse_qs(url.query)
                         return self._json(
@@ -252,6 +263,22 @@ class DashboardServer:
         conn = connect_readonly(self.db_path)
         try:
             return data.snapshot(conn, self.gateway, self.clock_ms(), self.symbol)
+        finally:
+            conn.close()
+
+    def read(self, fn: Callable[..., Any], *args: Any) -> Any:
+        """Run one `data` reader that takes (conn, now_ms, ...) on a read-only connection."""
+        conn = connect_readonly(self.db_path)
+        try:
+            return fn(conn, self.clock_ms(), *args)
+        finally:
+            conn.close()
+
+    def read_symbol(self, fn: Callable[..., Any], *args: Any) -> Any:
+        """The same for a reader that takes (conn, symbol, ...)."""
+        conn = connect_readonly(self.db_path)
+        try:
+            return fn(conn, self.symbol, *args)
         finally:
             conn.close()
 
@@ -396,4 +423,11 @@ def _int(q: dict[str, list[str]], key: str, default: int) -> int:
     try:
         return int(q[key][0])
     except (KeyError, IndexError, ValueError):
+        return default
+
+
+def _str(q: dict[str, list[str]], key: str, default: str) -> str:
+    try:
+        return q[key][0][:80]
+    except (KeyError, IndexError):
         return default

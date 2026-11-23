@@ -402,3 +402,102 @@ def test_inbox_connection_can_do_nothing_but_queue_a_question(tmp_path):
             conn.execute(sql)
     conn.close()
     assert connect(path).execute("SELECT COUNT(*) FROM trades").fetchone()[0] == 1
+
+
+def _trade_story(path: Path) -> None:
+    """A second trade with everything the detail view joins: the code-only proposal, the agent's
+    own answer, the cycle, the position, the entry order and one trailing stop move."""
+    c = connect(path)
+    t0 = (1_794_885_000 + 60 * 2) * 1000  # on the third stored bar
+    c.execute(
+        "INSERT INTO proposals(proposal_id, created_ms, bot, action, side, thesis, raw_json, "
+        "gate_status, gate_reason) VALUES ('co', ?, 'code_only', 'enter', 'long', 'rule signal', "
+        "'{}', 'sent', 'executed')",
+        (t0,),
+    )
+    c.execute(
+        "INSERT INTO proposals(proposal_id, created_ms, bot, action, confidence, thesis, "
+        "invalidation, raw_json, gate_status, gate_reason) VALUES ('st', ?, 'strategy', 'wait', "
+        "0.4, 'weak evidence', 'a breakout', '{}', 'wait', 'wait')",
+        (t0,),
+    )
+    steps = [{"step": "code_only", "ok": True, "reason": "enter", "at_ms": t0}]
+    c.execute(
+        "INSERT INTO brain_cycles VALUES ('c2', ?, ?, 'sent', 'st', 'code_only', 70, ?)",
+        (t0, t0 + 4_000, json.dumps(steps)),
+    )
+    c.execute(
+        "INSERT INTO positions(position_id, symbol, side, volume, price_open, sl, tp, opened_ms, "
+        "status, intent_id, initial_stop, risk_pct, risk_usd, source) VALUES (77, 'XAUUSDm', "
+        "'long', 0.01, 4002.2, 4004.0, 4030.0, ?, 'closed', 'i77', 3992.2, 0.2, 10.0, 'engine')",
+        (t0,),
+    )
+    for kind, sent, iid, req, asked, got, slip in (
+        ("entry", t0, "i77", {"sl": 3992.2}, 4002.0, 4002.2, 200.0),
+        ("sltp", t0 + 240_000, "trail:77:1", {"sl": 4004.0}, None, None, None),
+    ):
+        c.execute(
+            "INSERT INTO order_attempts(sent_ms, kind, stage, attempt, intent_id, position_id, "
+            "request_json, result_json, retcode, requested_price, filled_price, slippage_points, "
+            "volume) VALUES (?, ?, 'send', 1, ?, 77, ?, '{}', 10009, ?, ?, ?, 0.01)",
+            (sent, kind, iid, json.dumps(req), asked, got, slip),
+        )
+    c.execute(
+        "INSERT INTO trades (trade_id, position_id, proposal_id, side, volume, entry_ms, exit_ms, "
+        "entry_price, exit_price, gross_pnl, spread_cost, slippage_cost, commission, swap, net_pnl, "
+        "r_multiple, exit_reason) VALUES ('t2', 77, 'co', 'long', 0.01, ?, ?, 4002.2, 3997.2, -5, "
+        "0.2, 0.1, 0, 0, -5.0, -0.5, 'trail')",
+        (t0, t0 + 480_000),
+    )
+    c.commit()
+    c.close()
+
+
+def test_trades_page_statistics_and_trade_detail(tmp_path):
+    path = _db(tmp_path)
+    _trade_story(path)
+    conn = connect_readonly(path)
+    page = data.trades_page(conn, NOW, "all")
+    json.dumps(page)
+    s = page["stats"]
+    assert [t["trade_id"] for t in page["trades"]] == ["t1", "t2"]  # newest first
+    assert (s["n"], s["wins"], s["losses"], s["hit_rate"]) == (2, 1, 1, 0.5)
+    assert s["net"] == 4.8 and s["profit_factor"] == 1.96 and s["expectancy_r"] == 0.45
+    assert s["max_drawdown_usd"] == 5.0 and s["curve"][-1][1] == 4.8  # the loss came first
+    assert s["costs"] == {
+        "spread": 0.4,
+        "slippage": 0.1,
+        "commission": 0.0,
+        "swap": 0.0,
+        "total": 0.5,
+    }
+    assert s["by"]["exit_reason"]["trail"] == {"n": 1, "wins": 0, "net": -5.0, "sum_r": -0.5}
+    assert s["by"]["ai"]["wait"]["n"] == 1 and s["by"]["ai"]["unavailable"]["n"] == 1
+    assert dict(s["r_hist"])["-1 to -0.5"] == 1 and dict(s["r_hist"])["1 to 2"] == 1
+    assert data.trades_page(conn, NOW, "nonsense")["period"] == "all"
+    assert data.trades_page(conn, NOW + 40 * 86_400_000, "month")["stats"]["n"] == 0
+
+    d = data.trade_detail(conn, "XAUUSDm", "t2")
+    json.dumps(d)
+    assert d["ai"] == "wait" and d["opened_by"]["bot"] == "code_only"
+    assert d["agent"]["thesis"] == "weak evidence" and d["cycle"]["steps"][0]["step"] == "code_only"
+    assert [o["kind"] for o in d["orders"]] == ["entry", "sltp"] and d["orders"][1]["trail"]
+    assert [s_[1] for s_ in d["stops"]] == [3992.2, 4004.0]  # the original stop, then the trail
+    assert d["candle_minutes"] == 1 and len(d["candles"]) == 12
+    x = d["excursion"]
+    assert x["stop_distance"] == 10.0 and x["mfe"] > 0 and x["mfe_r"] == round(x["mfe"] / 10, 2)
+    assert data.trade_detail(conn, "XAUUSDm", "nope") is None
+
+    srv = DashboardServer(path, Gateway(), port=0, clock_ms=lambda: NOW)
+    srv.start()
+    try:
+        assert json.loads(_get(srv.port, "/api/trades?period=week")[2])["period"] == "week"
+        assert json.loads(_get(srv.port, "/api/trade?id=t2")[2])["trade"]["net_pnl"] == -5.0
+        with pytest.raises(urllib.error.HTTPError) as e:
+            _get(srv.port, "/api/trade?id=missing")
+        assert e.value.code == 404
+        code, h, raw = _get(srv.port, "/vendor/lightweight-charts.js")
+        assert code == 200 and b"LightweightCharts" in raw and "javascript" in h["Content-Type"]
+        assert _get(srv.port, "/pages.js")[0] == 200
+    finally:
+        srv.stop()
