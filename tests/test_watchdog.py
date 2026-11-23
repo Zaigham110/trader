@@ -105,3 +105,28 @@ def test_owner_is_told_when_the_gateway_goes_quiet_and_when_it_returns():
         ("critical", "gateway_stale"), ("critical", "gateway_stale"), ("info", "gateway_recovered"),
     ]  # fmt: skip
     assert "not reported for 4 minutes" in rows[0][2] and "stop at the broker" in rows[0][2]
+
+
+def test_brain_run_loop_beats_after_every_tick_even_one_that_raised():
+    from goldtrader.brain.service import BrainService
+
+    class Stub:
+        calls = 0
+
+        def tick(self):
+            self.calls += 1
+            if self.calls == 2:
+                raise RuntimeError("a job blew up")
+            return []
+
+    stop = threading.Event()
+    beats: list[int] = []
+
+    def beat():
+        beats.append(1)
+        if len(beats) == 3:
+            stop.set()
+
+    s = Stub()
+    BrainService.run(s, stop, interval_s=0, on_tick=beat)
+    assert len(beats) == 3 and s.calls == 3  # the loop is still turning after an error

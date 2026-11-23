@@ -503,10 +503,14 @@ class BrainService:
     def tick(self) -> list[str]:
         return self.scheduler.tick()
 
-    def run(self, stop: threading.Event, interval_s: float = 1.0) -> None:
+    def run(self, stop: threading.Event, interval_s: float = 1.0, on_tick=None) -> None:
+        """`on_tick` is called after every pass of the scheduler, including one that raised: the
+        loop is then still turning. Only a call that never returns stops it (the watchdog, D-078)."""
         while not stop.is_set():
             try:
                 self.tick()
             except Exception:  # the scheduler isolates jobs; this guards the loop itself
                 log.exception("brain tick failed")
+            if on_tick is not None:
+                on_tick()
             stop.wait(interval_s)

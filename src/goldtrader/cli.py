@@ -430,6 +430,9 @@ def brain(
     gateway_url: str = "http://127.0.0.1:8750",
     provider: str = typer.Option("fake", help="fake | anthropic | none"),
     minutes: float | None = None,
+    watchdog_s: float = typer.Option(
+        900.0, help="Restart if the loop makes no progress for this long (0 = off)"
+    ),
 ) -> None:
     """Run the brain process: scheduler, bots, decision cycle, trade review, alerts."""
     import logging
@@ -448,7 +451,8 @@ def brain(
     install_redaction(logging.getLogger(), all_secret_values())
     cfg = _load(config)
     state_dir = Path(cfg.data.db_dir)
-    ExitLog(state_dir / "brain.exit.log").install("brain")
+    brain_exit_log = ExitLog(state_dir / "brain.exit.log")
+    brain_exit_log.install("brain")
     with acquire("brain", state_dir):
         conn = connect(db)
         migrate(conn)
@@ -507,7 +511,24 @@ def brain(
         stop = threading.Event()
         if minutes:
             threading.Timer(minutes * 60, stop.set).start()
-        svc.run(stop)
+        dog = None
+        if watchdog_s > 0:
+            # One job that never returns stops the whole single-threaded loop: no decisions, no
+            # alerts, no heartbeat, with the process still "Running" (2026-11-23, 56 minutes).
+            from goldtrader.process.watchdog import Watchdog
+
+            dog = Watchdog(
+                watchdog_s,
+                name="brain loop",
+                dump_path=state_dir / "brain.stuck.log",
+                on_exit=lambda why: brain_exit_log.record_exit("watchdog", why),
+            )
+            dog.start()
+        try:
+            svc.run(stop, on_tick=dog.beat if dog is not None else None)
+        finally:
+            if dog is not None:
+                dog.stop()  # a clean shutdown is not a stuck loop
 
 
 @app.command("status")
