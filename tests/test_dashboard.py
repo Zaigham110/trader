@@ -152,6 +152,22 @@ def test_server_serves_page_and_api_and_is_read_only(tmp_path):
         assert code == 200 and b"<title>Goldtrader</title>" in body
         assert "default-src 'none'" in headers["Content-Security-Policy"]
         assert b"http://" not in body and b"https://" not in body  # nothing loaded from outside
+        csp = headers["Content-Security-Policy"]
+        assert "script-src 'self';" in csp  # no inline script may run
+        assert b"<script>" not in body and b"onclick=" not in body
+        # our own files, by exact name only (D-083); none of them points outside this PC
+        for asset, ctype in (
+            ("/app.css", "text/css"),
+            ("/app.js", "javascript"),
+            ("/legacy.js", "javascript"),
+        ):
+            code, h, raw = _get(srv.port, asset)
+            assert code == 200 and ctype in h["Content-Type"] and len(raw) > 500
+            assert b"http://" not in raw and b"https://" not in raw
+        for bad_asset in ("/server.py", "/vendor/../index.html", "/app.css/", "/static/app.css"):
+            with pytest.raises(urllib.error.HTTPError) as e:
+                _get(srv.port, bad_asset)
+            assert e.value.code == 404
         snap = json.loads(_get(srv.port, "/api/snapshot")[2])
         assert snap["now_ms"] == NOW and snap["symbol"] == "XAUUSDm"
         bars = json.loads(_get(srv.port, "/api/bars?minutes=5&limit=abc")[2])

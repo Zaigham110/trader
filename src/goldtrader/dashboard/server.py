@@ -27,14 +27,27 @@ from urllib.parse import parse_qs, urlsplit
 from goldtrader.dashboard import data
 
 LOOPBACK = ("127.0.0.1", "localhost", "::1")
-PAGE = Path(__file__).parent / "static" / "index.html"
+STATIC = Path(__file__).parent / "static"
+PAGE = STATIC / "index.html"
+# The only files this server hands out, by exact request path (D-083): nothing in the request
+# reaches the file system, so there is nothing to traverse. The chart library is a copy kept in
+# the repository; the page loads nothing from outside this PC.
+ASSETS: dict[str, tuple[str, str]] = {
+    "/app.css": ("app.css", "text/css; charset=utf-8"),
+    "/app.js": ("app.js", "text/javascript; charset=utf-8"),
+    "/legacy.js": ("legacy.js", "text/javascript; charset=utf-8"),
+    "/vendor/lightweight-charts.js": (
+        "vendor/lightweight-charts.standalone.production.js",
+        "text/javascript; charset=utf-8",
+    ),
+}
 SECURITY_HEADERS = {
     "Cache-Control": "no-store",
     "X-Content-Type-Options": "nosniff",
     "X-Frame-Options": "DENY",
     "Referrer-Policy": "no-referrer",
     "Content-Security-Policy": (
-        "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; "
+        "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
         "connect-src 'self'; img-src data:; base-uri 'none'; form-action 'none'"
     ),
 }
@@ -147,6 +160,12 @@ class DashboardServer:
                 try:
                     if url.path in ("/", "/index.html"):
                         return self._send(200, PAGE.read_bytes(), "text/html; charset=utf-8")
+                    if url.path in ASSETS:
+                        name, ctype = ASSETS[url.path]
+                        f = STATIC / name
+                        if not f.is_file():
+                            return self._json(404, {"error": "not_found"})
+                        return self._send(200, f.read_bytes(), ctype)
                     if url.path == "/api/snapshot":
                         return self._json(200, srv.snapshot())
                     if url.path == "/api/live":
