@@ -93,6 +93,14 @@ class Repo:
             ).fetchone()
         return float(row[0]) if row is not None and row[0] else None
 
+    def equity_peak_since(self, login: int, since_ms: int = 0) -> float | None:
+        """The highest equity in the stored snapshots from ``since_ms`` on."""
+        row = self.c.execute(
+            "SELECT MAX(equity) FROM account_snapshots WHERE login=? AND read_ms>=?",
+            (login, since_ms),
+        ).fetchone()
+        return float(row[0]) if row is not None and row[0] else None
+
     # --- bars ---------------------------------------------------------------------------
     def upsert_bars(self, symbol: str, bars: Iterable[Bar], source: str) -> int:
         rows = [

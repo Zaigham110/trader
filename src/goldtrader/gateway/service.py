@@ -70,8 +70,10 @@ class GatewayService:
         port: int = 8750,
         events_fn: Callable[[], list[Event]] | None = None,
         start_api: bool = True,
+        allow_live: bool = False,
     ) -> None:
         self.client = client
+        self.allow_live = allow_live
         self.cfg = cfg
         self.repo = repo
         self.clock_ms = clock_ms or (lambda: int(time.time() * 1000))
@@ -86,6 +88,7 @@ class GatewayService:
         self.on_step = None  # called after every loop step (the watchdog's heartbeat, D-065)
         self._snapshot: Snapshot | None = None
         self._trail_state: dict[int, dict] = {}  # per open position: best price, back-off
+        self._trades_seen = 0  # rowid of the last closed trade counted for the loss pause
         self.api: GatewayAPI | None = None
         self.started = False
 
@@ -93,6 +96,7 @@ class GatewayService:
     def start(self) -> None:
         if not self.client.initialize():
             raise RuntimeError("MT5 initialize() failed")
+        self._check_account()
         self.symbol = find_gold_symbol(self.client, preferred=self.cfg.account.symbol)
         self.client.symbol_select(self.symbol, True)
         self.spec = read_spec(self.client, self.symbol)
@@ -135,6 +139,30 @@ class GatewayService:
         self.started = True
         self.step()
 
+    def _check_account(self) -> None:
+        """Refuse to run on the wrong kind of account (D-080). Real money needs three things that
+        agree: a real account in the terminal, a live config (environment and mode), and the
+        owner's ALLOW_LIVE secret. A demo config never runs on a real account, and a live config
+        never runs on a demo account, whichever account the terminal happens to be logged in to."""
+        acct = self.client.account_info()
+        if acct is None:
+            raise RuntimeError("account_info unavailable: cannot tell a demo from a real account")
+        real = acct.trade_mode == K.ACCOUNT_TRADE_MODE_REAL
+        live_cfg = self.cfg.account.environment == "live"
+        if real and not (live_cfg and self.cfg.owner.mode == "live"):
+            raise RuntimeError(
+                "the terminal is logged in to a REAL account but this config is not a live one "
+                "(account.environment and owner.mode must both be live); refusing to start"
+            )
+        if real and not self.allow_live:
+            raise RuntimeError("real account: the ALLOW_LIVE secret is missing; refusing to start")
+        if live_cfg and not real:
+            raise RuntimeError(
+                "this config is for a live account but the terminal is logged in to a demo "
+                "account; refusing to start"
+            )
+        self.account_login = acct.login
+
     def _seed_pnl(self) -> None:
         """Day and week P&L (and so the daily and weekly loss limits) count from the start of the
         day and week, not from the last restart (D-077): take both baselines from the stored
@@ -150,8 +178,40 @@ class GatewayService:
                 self.repo.equity_at(acct.login, day * 86_400_000),
                 self.repo.equity_at(acct.login, (week * 7 - 3) * 86_400_000),
             )
+            # The drawdown limit is measured from the equity high (RISK_POLICY §1), not from the
+            # high since the last restart (D-079). An owner reset of the kill switch starts a new high.
+            row = self.repo.c.execute(
+                "SELECT MAX(closed_ms) FROM incidents WHERE kind='kill_switch' "
+                "AND closed_ms IS NOT NULL"
+            ).fetchone()
+            since = int(row[0]) if row and row[0] else 0
+            peak = self.repo.equity_peak_since(acct.login, since)
+            if peak:
+                self.pnl.equity_peak = max(self.pnl.equity_peak, peak)
         except Exception:  # noqa: BLE001
-            log.exception("could not restore the day/week P&L baselines")
+            log.exception("could not restore the day/week P&L baselines and the equity high")
+        try:  # the loss pause: replay the latest closed trades so a restart keeps count and pause
+            rows = self.repo.c.execute(
+                "SELECT rowid, exit_ms, net_pnl FROM trades ORDER BY exit_ms DESC, rowid DESC LIMIT 50"
+            ).fetchall()
+            for _rowid, exit_ms, net in reversed(rows):
+                self.pnl.note_trade_result(float(net), int(exit_ms), self.cfg)
+            self._trades_seen = int(
+                self.repo.c.execute("SELECT COALESCE(MAX(rowid), 0) FROM trades").fetchone()[0]
+            )
+        except Exception:  # noqa: BLE001
+            log.exception("could not restore the consecutive-loss count")
+
+    def _count_closed_trades(self) -> None:
+        """Feed every newly booked trade to the consecutive-loss counter (RISK_POLICY §1: three
+        losses in a row pause entries). Until D-079 nothing called it, so the pause never happened."""
+        rows = self.repo.c.execute(
+            "SELECT rowid, exit_ms, net_pnl FROM trades WHERE rowid > ? ORDER BY rowid",
+            (self._trades_seen,),
+        ).fetchall()
+        for rowid, exit_ms, net in rows:
+            self.pnl.note_trade_result(float(net), int(exit_ms), self.cfg)
+            self._trades_seen = int(rowid)
 
     def stop(self) -> None:
         if self.api is not None:
@@ -199,9 +259,12 @@ class GatewayService:
                 self.counters.kills += 1
             if intent.kind == "resume" and result.status == "executed":
                 # owner-confirmed resume also clears the kill switch (RISK_POLICY §3 reset rule)
+                was_killed = self.engine.killed
                 self.engine.reset_kill(
                     owner_token_ok=intent.source in ("owner_confirmed", "system")
                 )
+                if was_killed and not self.engine.killed:
+                    self.pnl.equity_peak = 0.0  # the owner's reset starts a new equity high
                 self.flags.kill_switch = self.engine.killed
                 self.counters.disconnected_since_ms = None
             if intent.kind in ("pause", "resume"):
@@ -218,6 +281,13 @@ class GatewayService:
             or self.journal.open_incident("spec_critical_change") is not None
             or self.journal.open_incident("stop_missing") is not None
         )
+        acct = self.client.account_info()
+        if acct is not None and acct.login != self.account_login:
+            # someone switched account in the terminal: touch nothing; the watchdog ends
+            # the process and the next start checks the new account from scratch
+            raise RuntimeError(
+                f"terminal account changed from {self.account_login} to {acct.login}"
+            )
         snap = self.state.snapshot(now, self.events_fn())
         if snap is None:
             raise RuntimeError("account_info/terminal_info unavailable")
@@ -238,6 +308,7 @@ class GatewayService:
                         c.bars_closed += 1
                 if self.market.flush_if_stale(now) is not None:
                     c.bars_closed += 1
+                self._count_closed_trades()
                 snap = self._refresh()
                 if self._safety(snap, now):
                     snap = self._refresh()

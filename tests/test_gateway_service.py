@@ -303,3 +303,131 @@ def test_restart_keeps_the_day_and_week_pnl_baselines():
         assert again._snapshot.account.week_pnl == 60.0
     finally:
         svc.stop()
+
+
+def _book(repo, n, exit_ms, net):
+    repo.c.execute(
+        "INSERT INTO trades(trade_id, side, volume, entry_ms, exit_ms, entry_price, exit_price, "
+        "gross_pnl, spread_cost, slippage_cost, commission, swap, net_pnl, exit_reason) "
+        "VALUES (?, 'long', 0.01, ?, ?, 4000, 4000, ?, 0, 0, 0, 0, ?, 'stop')",
+        (f"t{n}", exit_ms - 60_000, exit_ms, net, net),
+    )
+
+
+def test_three_losses_in_a_row_pause_entries_and_a_restart_keeps_the_pause():
+    svc, client, clock, repo = _service()
+    try:
+        gw = GatewayClient(f"http://127.0.0.1:{svc.api.port}", svc.token)
+        for i in range(70):
+            _tick(client, clock, 4000.0 + 0.01 * (i % 3), 4000.2 + 0.01 * (i % 3))
+            svc.step()
+        atr = gw.state().atr
+
+        def enter(n):
+            return gw.send_intent(
+                Intent(
+                    intent_id=f"p{n}",
+                    kind="enter",
+                    created_ms=clock.ms,
+                    side="long",
+                    stop_price=round(4000.2 - 0.8 * atr, 2),
+                    target_price=round(4000.2 + 1.2 * atr, 2),
+                    bundle_id="b1",
+                    proposal_id=f"pp{n}",
+                )
+            )
+
+        _book(repo, 1, clock.ms - 3_000, -5.0)
+        _book(repo, 2, clock.ms - 2_000, +5.0)  # a win in between resets the count
+        _book(repo, 3, clock.ms - 1_500, -5.0)
+        _book(repo, 4, clock.ms - 1_000, -5.0)
+        svc.step()
+        assert svc.pnl.consecutive_losses == 2 and svc.pnl.cooldown_until_ms == 0
+        last = clock.ms
+        _book(repo, 5, last, -5.0)
+        svc.step()
+        assert svc.pnl.cooldown_until_ms == last + 60 * 60_000
+        res = enter(1)
+        assert res.status == "rejected" and res.risk_code == "cooldown"
+        # a restart rebuilds the same pause from the stored trades
+        again = GatewayService(
+            client, svc.cfg, repo, clock_ms=clock, token="t" * 32, port=0, start_api=False
+        )
+        again.start()
+        assert again.pnl.cooldown_until_ms == last + 60 * 60_000
+        assert again._snapshot.account.cooldown_until_ms == last + 60 * 60_000
+        # after the pause entries are allowed again
+        clock.advance(61 * 60)
+        client.set_price(4000.0, 4000.2, clock.ms)
+        svc.step()
+        assert enter(2).status == "executed"
+    finally:
+        svc.stop()
+
+
+def test_restart_keeps_the_equity_high_and_an_owner_reset_starts_a_new_one():
+    svc, client, clock, repo = _service()
+    try:
+        equity = client.account_info().equity
+        assert svc.pnl.equity_peak == equity
+        repo.record_account(client.account_info())
+        rid = repo.c.execute("SELECT max(id) FROM account_snapshots").fetchone()[0]
+        repo.c.execute(
+            "UPDATE account_snapshots SET read_ms=?, equity=? WHERE id=?",
+            (clock.ms - 3 * 86_400_000, equity + 200.0, rid),
+        )
+        again = GatewayService(
+            client, svc.cfg, repo, clock_ms=clock, token="t" * 32, port=0, start_api=False
+        )
+        again.start()
+        assert again._snapshot.account.equity_peak == equity + 200.0
+        # a kill switch the owner reset after that high: the high before the reset no longer counts
+        repo.c.execute(
+            "INSERT INTO incidents(opened_ms, severity, kind, summary, closed_ms) "
+            "VALUES (?, 'critical', 'kill_switch', 'x', ?)",
+            (clock.ms - 2 * 86_400_000, clock.ms - 86_400_000),
+        )
+        after = GatewayService(
+            client, svc.cfg, repo, clock_ms=clock, token="t" * 32, port=0, start_api=False
+        )
+        after.start()
+        assert after._snapshot.account.equity_peak == equity
+    finally:
+        svc.stop()
+
+
+def _unstarted(client, over=None):
+    conn = connect(None)
+    migrate(conn)
+    cfg = parse_config({"session": {"dst_mode": "winter"}, **(over or {})})
+    clock = Clock(int(START.timestamp() * 1000))
+    client.set_price(4000.0, 4000.2, clock.ms)
+    return lambda **kw: GatewayService(
+        client, cfg, Repo(conn), clock_ms=clock, token="t" * 32, port=0, start_api=False, **kw
+    )
+
+
+def test_gateway_refuses_the_wrong_kind_of_account():
+    import pytest
+
+    from goldtrader.mt5 import constants as K
+
+    live = {"account": {"environment": "live"}, "owner": {"mode": "live"}}
+    real = FakeMT5()
+    real.set_account(trade_mode=K.ACCOUNT_TRADE_MODE_REAL)
+    with pytest.raises(RuntimeError, match="REAL account"):
+        _unstarted(real)().start()  # demo config on a real account
+    with pytest.raises(RuntimeError, match="REAL account"):
+        _unstarted(real)(allow_live=True).start()  # the secret alone is not enough
+    with pytest.raises(RuntimeError, match="ALLOW_LIVE"):
+        _unstarted(real, live)().start()  # live config without the owner's secret
+    with pytest.raises(RuntimeError, match="demo account"):
+        _unstarted(FakeMT5(), live)(allow_live=True).start()  # live config on a demo account
+    ok = _unstarted(real, live)(allow_live=True)
+    ok.start()
+    assert ok.started and ok.step() is not None
+    # the account is switched in the terminal while running: every step fails, nothing is sent
+    real.set_account(login=real.account_info().login + 1)
+    n = len(real.requests)
+    assert ok.step() is None and "account changed" in ok.counters.last_error
+    assert len(real.requests) == n
