@@ -88,6 +88,8 @@ class _Open:
     slip_cost_entry: float
     bars_held: int = 0
     at_breakeven: bool = False
+    best: float = 0.0  # best price reached so far (bid high for a long, ask low for a short)
+    trailing: bool = False
 
 
 def _round_volume(v: float, spec: SymbolSpec) -> float:
@@ -126,6 +128,9 @@ def run_backtest(
     equity0: float = 5000.0,
     on_opposite: str = "hold",
     breakeven_at_r: float | None = None,
+    trail_atr: float | None = None,
+    trail_after_r: float = 0.0,
+    use_target: bool = True,
 ) -> BacktestResult:
     """Replay `strategy` bar by bar under the owner's risk rules and the cost model.
 
@@ -135,6 +140,10 @@ def run_backtest(
         at that same open (through every entry check).
       breakeven_at_r: once a bar has traded this many stop-distances in profit, the stop
         moves to the entry price from the next bar on.
+      trail_atr: once the trade has been ``trail_after_r`` stop-distances in profit, the
+        stop follows the best price reached at this many ATR (the ATR at entry) and only
+        ever moves toward profit. A bar's own extreme moves the stop for the next bar.
+      use_target: False removes the fixed target, so only the stop closes the trade.
     """
     if on_opposite not in ("hold", "close", "reverse"):
         raise ValueError("on_opposite must be hold, close or reverse")
@@ -305,6 +314,8 @@ def run_backtest(
                     contract = spec.trade_contract_size
                     sl = entry - stop_distance if side == "long" else entry + stop_distance
                     tp = entry + target_atr * a if side == "long" else entry - target_atr * a
+                    if not use_target:
+                        tp = math.inf if side == "long" else -math.inf
                     pos = _Open(
                         side=side,
                         volume=vol,
@@ -318,6 +329,7 @@ def run_backtest(
                         regime=str(regime[i - 1]),
                         spread_cost_entry=abs(entry - mid) * vol * contract,
                         slip_cost_entry=cost.slippage_points * spec.point * vol * contract,
+                        best=entry,
                     )
             else:
                 reject(why)
@@ -339,7 +351,9 @@ def run_backtest(
                     hit_tp = bh[i] >= pos.tp
                     if hit_sl:
                         px = min(pos.sl, bo[i]) if cost.stop_gap_fill else pos.sl
-                        why = "breakeven" if pos.at_breakeven else "stop"
+                        why = (
+                            "trail" if pos.trailing else "breakeven" if pos.at_breakeven else "stop"
+                        )
                         close_position(i, px - cost.slippage_points * spec.point, why)
                     elif hit_tp:
                         close_position(i, pos.tp, "target")
@@ -348,10 +362,26 @@ def run_backtest(
                     hit_tp = al[i] <= pos.tp
                     if hit_sl:
                         px = max(pos.sl, ao[i]) if cost.stop_gap_fill else pos.sl
-                        why = "breakeven" if pos.at_breakeven else "stop"
+                        why = (
+                            "trail" if pos.trailing else "breakeven" if pos.at_breakeven else "stop"
+                        )
                         close_position(i, px + cost.slippage_points * spec.point, why)
                     elif hit_tp:
                         close_position(i, pos.tp, "target")
+            if pos is not None and trail_atr is not None:
+                # the bar survived; its extreme can pull the stop along for the next bar
+                if pos.side == "long":
+                    pos.best = max(pos.best, bh[i])
+                    gain = pos.best - pos.entry_price
+                    new_sl = round(pos.best - trail_atr * pos.atr, spec.digits)
+                    if gain >= trail_after_r * pos.stop_distance and new_sl > pos.sl:
+                        pos.sl, pos.trailing = new_sl, True
+                else:
+                    pos.best = min(pos.best, al[i])
+                    gain = pos.entry_price - pos.best
+                    new_sl = round(pos.best + trail_atr * pos.atr, spec.digits)
+                    if gain >= trail_after_r * pos.stop_distance and new_sl < pos.sl:
+                        pos.sl, pos.trailing = new_sl, True
             if pos is not None and breakeven_at_r is not None and not pos.at_breakeven:
                 # the bar survived its stop and target; if it reached the trigger, the stop
                 # sits at the entry price from the next bar on

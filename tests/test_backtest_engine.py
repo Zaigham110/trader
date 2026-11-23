@@ -321,3 +321,33 @@ def test_breakeven_moves_the_stop_to_entry_only_after_the_trigger():
     assert t.exit_reason == "breakeven" and t.exit_price == pytest.approx(4000.2)
     late = _managed(rows, {0: +1}, breakeven_at_r=2.0)
     assert late.trades.iloc[0].exit_reason == "end_of_data"  # trigger not reached: stop stays
+
+
+def test_trailing_stop_follows_the_best_price_and_never_moves_back():
+    # long from 4000.2 (ATR 10): stop 3990.2, target 4020.2. Bar 2 reaches 4012, so a 0.5-ATR
+    # trail puts the stop at 4007 for the next bar; bar 3 dips to 4006 and is closed there.
+    rows = [QUIET, QUIET, (4000, 4012, 3999, 4010), (4010, 4011, 4006, 4008), QUIET]
+    plain = _managed(rows, {0: +1})
+    assert plain.trades.iloc[0].exit_reason == "end_of_data"
+    tr = _managed(rows, {0: +1}, trail_atr=0.5)
+    t = tr.trades.iloc[0]
+    assert t.exit_reason == "trail" and t.exit_price == pytest.approx(4007.0) and t.net_pnl > 0
+    # not yet 2 stop-distances in profit: the stop stays where it was
+    late = _managed(rows, {0: +1}, trail_atr=0.5, trail_after_r=2.0)
+    assert late.trades.iloc[0].exit_reason == "end_of_data"
+    # a trail wider than the original stop never loosens it
+    wide = _managed(rows, {0: +1}, trail_atr=3.0)
+    assert wide.trades.iloc[0].sl == pytest.approx(3990.2)
+
+
+def test_trailing_stop_mirrors_for_a_short_and_the_target_can_be_removed():
+    # short from 4000 (bid open): stop 4010, target 3980. Bar 2 falls to ask 3988.2, a 0.5-ATR
+    # trail puts the stop at 3993.2; bar 3 bounces to ask 3994.2 and is closed there.
+    rows = [QUIET, QUIET, (4000, 4001, 3988, 3990), (3990, 3994, 3989, 3992), QUIET]
+    t = _managed(rows, {0: -1}, trail_atr=0.5).trades.iloc[0]
+    assert t.side == "short" and t.exit_reason == "trail" and t.net_pnl > 0
+    assert t.exit_price == pytest.approx(3993.2)
+    # with the target removed a bar through the old target does not close the trade
+    deep = [QUIET, QUIET, (4000, 4001, 3970, 3972), (3972, 3973, 3971, 3972)]
+    assert _managed(deep, {0: -1}).trades.iloc[0].exit_reason == "target"
+    assert _managed(deep, {0: -1}, use_target=False).trades.iloc[0].exit_reason == "end_of_data"
