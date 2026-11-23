@@ -16,6 +16,7 @@ from tests.test_execution_engine import (
     deal_sum,
     mk_cfg,
     mk_harness,
+    mk_market,
     mk_req,
 )
 
@@ -189,6 +190,20 @@ def test_short_sl_close(h: Harness):
     t = h.journal.trade(pid)
     assert t["exit_reason"] == "stop" and t["side"] == "short"
     assert t["net_pnl"] == pytest.approx(deal_sum(h.fake, pid)) and t["net_pnl"] < 0
+
+
+def test_stop_hit_after_a_trailing_move_is_booked_as_trail(h: Harness):
+    pid = h.enter().position_id
+    # a stop moved by the brain (no trail intent) still books as a plain stop
+    assert not h.journal.stop_was_trailed(pid)
+    moved = h.engine.move_stop(pid, 3990.0, mk_market(), h.ctx(), intent_id=f"trail:{pid}:1")
+    assert moved.status == "executed" and h.journal.stop_was_trailed(pid)
+    h.fake.set_price(3989.00, 3989.20)  # bid <= 3990 → the trailed stop fires
+    rep = mk_reconciler(h).run_once(h.clock())
+    assert rep.closed_detected == 1
+    t = h.journal.trade(pid)
+    assert t["exit_reason"] == "trail" and h.journal.position(pid)["exit_reason"] == "trail"
+    assert t["slippage_cost"] == pytest.approx(1.0)  # still measured against the stop level
 
 
 def test_vanished_position_without_deals_is_a_discrepancy(h: Harness):

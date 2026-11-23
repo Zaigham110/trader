@@ -170,6 +170,10 @@ class Reconciler:
         requested = None
         if row is not None:
             requested = row["sl"] if reason == "stop" else row["tp"] if reason == "target" else None
+        if reason == "stop" and self.journal.stop_was_trailed(ticket):
+            reason = (
+                "trail"  # the broker only sees a stop; ours had been moved by the trail (D-076)
+            )
         tick = self.client.symbol_info_tick(self.spec.name)
         spread = tick.spread if tick is not None else None
         trade = self.journal.book_trade(

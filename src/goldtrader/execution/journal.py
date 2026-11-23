@@ -285,6 +285,15 @@ class Journal:
             (closed_ms if closed_ms is not None else self.clock(), exit_reason, position_id),
         )
 
+    def stop_was_trailed(self, position_id: int) -> bool:
+        """True when the trailing stop (D-076) moved this position's stop at least once."""
+        row = self.c.execute(
+            "SELECT 1 FROM order_attempts WHERE position_id=? AND intent_id LIKE 'trail:%' "
+            "AND retcode=? LIMIT 1",
+            (position_id, K.TRADE_RETCODE_DONE),
+        ).fetchone()
+        return row is not None
+
     def position(self, position_id: int) -> sqlite3.Row | None:
         return self.c.execute(
             "SELECT * FROM positions WHERE position_id=?", (position_id,)
