@@ -473,7 +473,7 @@ def test_trades_page_statistics_and_trade_detail(tmp_path):
     }
     assert s["by"]["exit_reason"]["trail"] == {"n": 1, "wins": 0, "net": -5.0, "sum_r": -0.5}
     assert s["by"]["ai"]["wait"]["n"] == 1 and s["by"]["ai"]["unavailable"]["n"] == 1
-    assert dict(s["r_hist"])["-1 to -0.5"] == 1 and dict(s["r_hist"])["1 to 2"] == 1
+    assert dict(s["r_hist"])["-0.5 to 0"] == 1 and dict(s["r_hist"])["1 to 2"] == 1
     assert data.trades_page(conn, NOW, "nonsense")["period"] == "all"
     assert data.trades_page(conn, NOW + 40 * 86_400_000, "month")["stats"]["n"] == 0
 
