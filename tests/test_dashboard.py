@@ -499,5 +499,14 @@ def test_trades_page_statistics_and_trade_detail(tmp_path):
         code, h, raw = _get(srv.port, "/vendor/lightweight-charts.js")
         assert code == 200 and b"LightweightCharts" in raw and "javascript" in h["Content-Type"]
         assert _get(srv.port, "/pages.js")[0] == 200
+        info = json.loads(_get(srv.port, "/api/strategies")[2])
+        assert (
+            "trend_atr" in info["docs"] and info["configured"] == [] and info["instance"] == "demo"
+        )
+        assert info["results"]["unknown"]["n"] == 2 and "trailing" in info["common"]
+        assert json.loads(_get(srv.port, "/api/meta")[2]) == {
+            "instance": "demo",
+            "symbol": "XAUUSDm",
+        }
     finally:
         srv.stop()

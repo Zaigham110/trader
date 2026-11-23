@@ -1282,6 +1282,9 @@ def dashboard(
             port=port,
             config_path=config,
             strategies=tuple(st.id for st in cfg.strategies),
+            strategy_configs=[st.model_dump(mode="json") for st in cfg.strategies],
+            risk=cfg.owner.risk.model_dump(mode="json"),
+            instance=cfg.account.environment,
         )
         srv.start()
         typer.echo(

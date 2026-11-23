@@ -999,3 +999,21 @@ def trade_detail(conn: sqlite3.Connection, symbol: str, trade_id: str) -> dict[s
             "stop_distance": round(dist, 3) if dist else None,
         },
     }
+
+
+def results_by_bundle(conn: sqlite3.Connection) -> dict[str, dict[str, Any]]:
+    """Closed trades of the account per strategy id (bundle)."""
+    out: dict[str, dict[str, Any]] = {}
+    for r in conn.execute(
+        "SELECT COALESCE(bundle_id, 'unknown') AS b, COUNT(*) AS n, "
+        "SUM(CASE WHEN net_pnl > 0 THEN 1 ELSE 0 END) AS wins, SUM(net_pnl) AS net, "
+        "AVG(r_multiple) AS mean_r, MIN(entry_ms) AS first_ms FROM trades GROUP BY 1"
+    ):
+        out[r["b"]] = {
+            "n": r["n"],
+            "wins": r["wins"],
+            "net": round(r["net"] or 0.0, 2),
+            "mean_r": None if r["mean_r"] is None else round(r["mean_r"], 3),
+            "first_ms": r["first_ms"],
+        }
+    return out

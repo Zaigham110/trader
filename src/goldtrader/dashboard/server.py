@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
+from goldtrader import strategy_docs
 from goldtrader.dashboard import data
 
 LOOPBACK = ("127.0.0.1", "localhost", "::1")
@@ -122,6 +123,9 @@ class DashboardServer:
         config_path: Path | str | None = None,
         strategies: tuple[str, ...] = (),
         spawn: Callable[[list[str]], Any] | None = None,
+        strategy_configs: list[dict[str, Any]] | None = None,
+        risk: dict[str, Any] | None = None,
+        instance: str = "demo",
     ) -> None:
         if host not in LOOPBACK:
             raise ValueError("dashboard binds to loopback only")
@@ -131,6 +135,10 @@ class DashboardServer:
         self.clock_ms = clock_ms or (lambda: int(time.time() * 1000))
         self.config_path = Path(config_path) if config_path is not None else None
         self.strategies = tuple(strategies)
+        # shown on the Strategies and Risk pages: what is configured, never a secret
+        self.strategy_configs = list(strategy_configs or [])
+        self.risk = dict(risk or {})
+        self.instance = instance
         self._spawn = spawn or _spawn_detached
         self._tm_proc: Any = None
         self._tm_lock = threading.Lock()
@@ -181,6 +189,10 @@ class DashboardServer:
                                 return self._json(404, {"error": "not_found"})
                             return self._json(200, one)
                         return self._json(200, srv.timemachine_list())
+                    if url.path == "/api/meta":
+                        return self._json(200, {"instance": srv.instance, "symbol": srv.symbol})
+                    if url.path == "/api/strategies":
+                        return self._json(200, srv.strategies_info())
                     if url.path == "/api/trades":
                         q = parse_qs(url.query)
                         return self._json(200, srv.read(data.trades_page, _str(q, "period", "all")))
@@ -279,6 +291,22 @@ class DashboardServer:
         conn = connect_readonly(self.db_path)
         try:
             return fn(conn, self.symbol, *args)
+        finally:
+            conn.close()
+
+    def strategies_info(self) -> dict[str, Any]:
+        """The rules in plain words, what is configured, and the results so far."""
+        conn = connect_readonly(self.db_path)
+        try:
+            return {
+                "docs": strategy_docs.DOCS,
+                "common": strategy_docs.COMMON,
+                "configured": self.strategy_configs,
+                "risk": self.risk,
+                "instance": self.instance,
+                "paper": data.paper(conn, 12),
+                "results": data.results_by_bundle(conn),
+            }
         finally:
             conn.close()
 

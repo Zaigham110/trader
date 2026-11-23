@@ -283,3 +283,19 @@ tr.click:hover{background:rgba(232,184,74,.07)}
 body.no-scroll{overflow:hidden}
 @media (max-width:720px){.drawer{width:100vw;border-left:0} .chart-box.tall{height:280px}
   .bar-row{grid-template-columns:minmax(60px,1fr) minmax(30px,1fr) auto}}
+
+/* ----- strategies page ----- */
+.g-2{grid-template-columns:repeat(2,minmax(0,1fr))}
+@media (max-width:900px){.g-2{grid-template-columns:minmax(0,1fr)}}
+.strat-head{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center;margin-bottom:6px}
+.strat-head h1{font-size:19px;margin:0}
+.lead{font-size:14.5px;margin:4px 0 12px;max-width:760px}
+canvas.diagram{height:190px;border:1px solid var(--line);border-radius:10px;background:var(--panel)}
+table.params td.wrap,td.wrap{white-space:normal;text-align:left;min-width:180px}
+table.params td:nth-child(2){text-align:left;white-space:nowrap;color:var(--gold)}
+table.params th{text-align:left}
+tr.more>td{white-space:normal;text-align:left;background:var(--panel2);padding:12px 14px}
+tr.more[hidden]{display:none}
+.small{font-size:11.5px}
+.worked .para{max-width:760px}
+.linkbtn{display:inline-block;text-decoration:none;margin-top:8px}

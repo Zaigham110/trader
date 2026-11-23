@@ -292,7 +292,133 @@ async function openTrade(id) {
   }
 }
 
+/* ====================================================================== Strategies page */
+const ST = {data: null, open: new Set()};
+const diagrams = [];   // [canvas, diagram] pairs to redraw on resize or theme change
+function drawDiagram(canvas, d) {
+  if (!canvas.clientWidth) return;
+  const [g, W, H] = setup(canvas), padL = 8, padR = 8, padT = 14, padB = 14;
+  const X = x => padL + x / 100 * (W - padL - padR), Y = y => H - padB - y / 100 * (H - padT - padB);
+  const col = {stop: css("--down"), target: css("--up"), guide: css("--dim"), entry: css("--info")};
+  g.font = "11px 'Segoe UI', system-ui, sans-serif";
+  for (const l of d.levels) { g.strokeStyle = col[l.kind] || col.guide; g.setLineDash([5, 4]); g.beginPath(); g.moveTo(padL, Y(l.y)); g.lineTo(W - padR, Y(l.y)); g.stroke(); g.setLineDash([]); g.fillStyle = col[l.kind] || col.guide; g.textAlign = "left"; g.fillText(l.text, padL + 2, Y(l.y) - 8); }
+  g.strokeStyle = css("--gold"); g.lineWidth = 2; g.lineJoin = "round"; g.beginPath();
+  d.line.forEach((p, i) => i ? g.lineTo(X(p[0]), Y(p[1])) : g.moveTo(X(p[0]), Y(p[1]))); g.stroke(); g.lineWidth = 1;
+  for (const m of d.marks) {
+    const c = col[m.kind] || col.guide; g.fillStyle = c; g.beginPath(); g.arc(X(m.x), Y(m.y), 5, 0, 6.3); g.fill();
+    const w = g.measureText(m.text).width, right = X(m.x) + w + 12 > W;
+    g.textAlign = right ? "right" : "left"; g.fillText(m.text, X(m.x) + (right ? -10 : 10), Y(m.y) + 14);
+  }
+}
+function redrawDiagrams() { for (const [c, d] of diagrams) drawDiagram(c, d); }
+function ruleBody(doc) {
+  const b = el("div", "rule");
+  para(b, "When it enters:", doc.enters); para(b, "When it closes:", doc.exits);
+  if (doc.works_when) para(b, "Works best when:", doc.works_when);
+  if (doc.struggles_when) para(b, "Struggles when:", doc.struggles_when);
+  return b;
+}
+function paramTable(doc, params) {
+  const names = Object.keys(params).filter(k => k in doc.params);
+  if (!names.length) return el("div", "empty", "This rule has no settings.");
+  const t = el("table", "params"), h = el("tr"); for (const c of ["Setting", "Value", "What it means"]) h.appendChild(el("th", null, c)); t.appendChild(h);
+  for (const k of names) { const d = doc.params[k], r = el("tr");
+    r.appendChild(el("td", null, d.label)); r.appendChild(el("td", "num", Number(params[k]) + (d.unit ? " " + d.unit : ""))); r.appendChild(el("td", "wrap dim", d.meaning)); t.appendChild(r); }
+  const sx = el("div", "scroll-x"); sx.appendChild(t); return sx;
+}
+function workedExample(params, risk, atr) {
+  const b = el("div", "worked");
+  if (!atr || !params.stop_atr) { b.appendChild(el("div", "dim", "A worked example appears when the gateway reports the current ATR.")); return b; }
+  const stop = params.stop_atr * atr, target = (params.target_atr || 0) * atr;
+  const p = el("p", "para");
+  p.appendChild(document.createTextNode("Right now the ATR is " + f2(atr) + ". A trade opened this minute would have its stop " + f2(stop) + " away from the entry and its target " + f2(target) + " away. At 0.01 lot on this account that is a loss of about " + f2(stop) + " USD if the stop is hit (1 R) and a gain of about " + f2(target) + " USD at the target (" + (target / stop).toFixed(1) + " R)."));
+  b.appendChild(p);
+  if (risk && risk.trail_distance_r > 0) {
+    const start = risk.trail_after_r * stop, follow = risk.trail_distance_r * stop;
+    para(b, "Trailing stop:", "once the trade is " + f2(start) + " in profit (" + risk.trail_after_r + " R), the stop starts following the best price at a distance of " + f2(follow) + ", so from then on it closes in profit unless the price jumps straight past the stop.");
+  } else para(b, "Trailing stop:", "off for this account.");
+  return b;
+}
+function buildStrategies() {
+  const root = $("strategiesNew"), d = ST.data; clear(root); diagrams.length = 0;
+  const atr = snap && snap.gateway ? snap.gateway.atr : null;
+
+  const basics = el("section", "grid g-2");
+  const c1 = card("How every trade is sized and protected");
+  para(c1, "ATR.", d.common.atr); para(c1, "R.", d.common.r); para(c1, "Trailing stop.", d.common.trailing); para(c1, "Daily break.", d.common.session);
+  basics.appendChild(c1);
+  const c2 = card("The limits around every strategy");
+  const kvb = el("div", "kv num"), r = d.risk;
+  if (r && r.risk_per_trade_pct != null) {
+    kv(kvb, "Most risked on one trade", r.risk_per_trade_pct + "% of the account"); kv(kvb, "Positions at once", String(r.max_positions));
+    kv(kvb, "Largest trade size", r.max_volume_lots + " lot"); kv(kvb, "Stop allowed between", r.stop_atr_min + " and " + r.stop_atr_max + " x ATR");
+    kv(kvb, "Stop trading for the day after", "-" + r.daily_loss_pct + "%"); kv(kvb, "Stop trading for the week after", "-" + r.weekly_loss_pct + "%");
+    kv(kvb, "Pause after losses in a row", r.consecutive_loss_pause + " (for " + r.cooldown_min + " min)"); kv(kvb, "No entry when spread is above", r.max_spread_pips + " pips");
+    c2.appendChild(kvb);
+    c2.appendChild(el("div", "tm-note", "No strategy and no AI agent can change these. They are checked in code on every order; the Risk & health page shows how much of each is used."));
+  } else c2.appendChild(el("div", "empty", "The limits are shown when the dashboard is started with a config."));
+  basics.appendChild(c2); root.appendChild(basics);
+
+  const live = d.configured.filter(s => s.enabled).concat(d.configured.filter(s => !s.enabled));
+  for (const s of live) {
+    const doc = d.docs[s.kind] || d.docs.flat, sec = el("section"), c = el("div", "card strat");
+    const head = el("div", "strat-head");
+    head.appendChild(el("h1", null, doc.name)); head.appendChild(el("span", "chip", doc.family));
+    head.appendChild(el("span", "a-state " + (s.enabled ? "ok" : ""), s.enabled ? "trading on this account" : "configured, not enabled"));
+    head.appendChild(el("span", "dim num", s.id)); c.appendChild(head);
+    c.appendChild(el("p", "lead", doc.summary));
+    const two = el("div", "grid g-2");
+    const left = el("div"); left.appendChild(ruleBody(doc)); two.appendChild(left);
+    const right = el("div"), cv = el("canvas", "diagram"); cv.setAttribute("aria-label", "Schematic of the rule: " + doc.summary); right.appendChild(cv);
+    right.appendChild(el("div", "tm-note", "A schematic of the idea, not real prices.")); two.appendChild(right); diagrams.push([cv, doc.diagram]);
+    c.appendChild(two);
+    c.appendChild(el("h2", "sub", "Its settings on this account")); c.appendChild(paramTable(doc, s.params));
+    c.appendChild(el("h2", "sub", "What that means in money right now")); c.appendChild(workedExample(s.params, d.risk, atr));
+    const res = d.results[s.id]; c.appendChild(el("h2", "sub", "Results on this account so far"));
+    if (res) { const k = el("div", "tm-cards");
+      tmCard(k, "Closed trades", String(res.n), "", res.wins + " won"); tmCard(k, "Net result", signed(res.net) + " USD", tone(res.net), "after all costs");
+      tmCard(k, "Average per trade", rTxt(res.mean_r), tone(res.mean_r), "R = multiples of the amount risked"); c.appendChild(k);
+      const a = el("a", "btn linkbtn", "See these trades"); a.href = "#trades"; c.appendChild(a);
+    } else c.appendChild(el("div", "empty", "No closed trade yet."));
+    sec.appendChild(c); root.appendChild(sec);
+  }
+  if (!d.configured.length) { const sec = el("section"), c = card("Strategies"); c.appendChild(el("div", "empty", "The configured strategy is shown when the dashboard is started with a config.")); sec.appendChild(c); root.appendChild(sec); }
+
+  // paper candidates, compared side by side
+  const sec = el("section"), pc = card("Versions being tried on paper", "Paper test");
+  pc.appendChild(el("div", "tm-note", d.common.paper + " Click a row to read the rule and its settings. With fewer than about 30 closed trades a result says very little."));
+  if (!d.paper.length) pc.appendChild(el("div", "empty", "No paper test is running."));
+  else {
+    const t = el("table", "sortable"), h = el("tr"); for (const c of ["Version", "Rule", "Running since", "Closed", "Won", "Net USD", "Average R", "Open now"]) h.appendChild(el("th", null, c)); t.appendChild(h);
+    for (const c of d.paper.slice().sort((a, b) => b.net_pnl - a.net_pnl)) {
+      const doc = d.docs[c.kind] || d.docs.flat, r = el("tr", "click"); r.tabIndex = 0;
+      const nm = el("td", "wrap"); nm.appendChild(el("b", null, c.bundle_id)); nm.appendChild(el("div", "dim small", c.label + (c.active ? "" : " (stopped)"))); r.appendChild(nm);
+      r.appendChild(el("td", null, doc.name)); r.appendChild(el("td", "num dim", dateHm(c.created_ms))); r.appendChild(el("td", "num", String(c.closed)));
+      r.appendChild(el("td", "num", c.closed ? pct(c.wins / c.closed) : "–")); r.appendChild(el("td", "num " + tone(c.net_pnl), signed(c.net_pnl)));
+      r.appendChild(el("td", "num " + tone(c.mean_r), c.mean_r != null ? c.mean_r.toFixed(2) : "–")); r.appendChild(el("td", "num dim", c.open.length ? c.open[0].side + " @ " + f2(c.open[0].entry_price) : "none"));
+      const more = el("tr", "more"), td = el("td"); td.colSpan = 8; more.appendChild(td); more.hidden = !ST.open.has(c.bundle_id);
+      td.appendChild(el("p", "lead", doc.summary)); td.appendChild(ruleBody(doc)); td.appendChild(paramTable(doc, c.params));
+      const flip = () => { more.hidden = !more.hidden; if (more.hidden) ST.open.delete(c.bundle_id); else ST.open.add(c.bundle_id); };
+      r.addEventListener("click", flip); r.addEventListener("keydown", e => { if (e.key === "Enter") flip(); });
+      t.appendChild(r); t.appendChild(more);
+    }
+    const sx = el("div", "scroll-x"); sx.appendChild(t); pc.appendChild(sx);
+  }
+  sec.appendChild(pc); root.appendChild(sec);
+  redrawDiagrams();
+}
+async function loadStrategies() {
+  try { ST.data = await get("/api/strategies"); } catch (e) { return; }
+  buildStrategies();
+  // the live ATR comes with the first snapshot: draw the money example once it is there
+  if (!(snap && snap.gateway) && !ST.retry) { ST.retry = true; setTimeout(() => { if (GT.page === "strategies") buildStrategies(); }, 2500); }
+}
+
 /* ---------- wiring ---------- */
+GT.hooks.strategies = () => loadStrategies();
+window.addEventListener("resize", redrawDiagrams);
+setInterval(() => { if (GT.page === "strategies" && !document.hidden) loadStrategies(); }, 60000);
+get("/api/meta").then(m => { const b = $("inst"); b.textContent = m.instance === "live" ? "LIVE ACCOUNT" : "DEMO ACCOUNT"; b.className = "inst " + (m.instance === "live" ? "live" : "demo"); document.body.dataset.instance = m.instance; }).catch(() => {});
 GT.hooks.trades = () => loadTrades();
 setInterval(() => { if (GT.page === "trades" && !document.hidden && $("drawer").hidden) loadTrades(); }, 30000);
 $("drawerClose").addEventListener("click", closeDrawer);
