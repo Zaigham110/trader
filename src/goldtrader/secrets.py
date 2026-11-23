@@ -21,7 +21,22 @@ KNOWN = (
     "TELEGRAM_API_HASH",
     "GATEWAY_TOKEN",
     "ALLOW_LIVE",
+    # the live instance's own copies (D-081); see `scoped`
+    "MT5_LOGIN_LIVE",
+    "MT5_PASSWORD_LIVE",
+    "MT5_SERVER_LIVE",
+    "GATEWAY_TOKEN_LIVE",
+    "TELEGRAM_BOT_TOKEN_LIVE",
 )
+# Secrets that belong to one instance. A live config reads only the `_LIVE` name and never falls
+# back to the demo one: the live gateway must not log in with the demo account's details, the demo
+# brain must not hold a token the live gateway accepts, and two brains cannot poll one Telegram bot.
+SCOPED = ("MT5_LOGIN", "MT5_PASSWORD", "MT5_SERVER", "GATEWAY_TOKEN", "TELEGRAM_BOT_TOKEN")
+
+
+def scoped(name: str, environment: str) -> str:
+    """The secret name an instance uses: `<NAME>_LIVE` for a live config, else the plain name."""
+    return f"{name}_LIVE" if environment == "live" and name in SCOPED else name
 
 
 class MissingSecret(KeyError):
@@ -86,6 +101,14 @@ def all_secret_values() -> list[str]:
     out = []
     for n in KNOWN:
         v = get_secret(n, required=False)
-        if v and n not in ("MT5_LOGIN", "MT5_SERVER", "TELEGRAM_OWNER_CHAT_ID", "TELEGRAM_API_ID"):
+        if (
+            v
+            and not n.startswith(("MT5_LOGIN", "MT5_SERVER"))
+            and n
+            not in (
+                "TELEGRAM_OWNER_CHAT_ID",
+                "TELEGRAM_API_ID",
+            )
+        ):
             out.append(v)
     return out

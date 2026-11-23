@@ -28,6 +28,9 @@ class AccountConfig(Frozen):
     account_type: Literal["standard", "standard_cent", "pro", "raw_spread", "zero"] = "standard"
     commission_per_lot_per_side_usd: float = 0.0  # Standard: 0; Raw 3.5; Zero 5.5 (Verified)
     leverage_hint: int = 500  # recommendation only; real value from account_info()
+    # Full path of this instance's terminal64.exe. Needed as soon as two terminals are
+    # installed (demo and live side by side, D-081); None = the only / default terminal.
+    terminal_path: str | None = None
 
 
 class HoursConfig(Frozen):

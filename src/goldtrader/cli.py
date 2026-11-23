@@ -43,7 +43,16 @@ for _stream in (sys.stdout, sys.stderr):
         pass
 
 
-def _client(fake: bool):
+def _sname(cfg: Config | None, name: str) -> str:
+    """The secret name this instance uses (`<NAME>_LIVE` for a live config, D-081)."""
+    from goldtrader.secrets import scoped
+
+    return scoped(name, cfg.account.environment if cfg is not None else "demo")
+
+
+def _client(fake: bool, cfg: Config | None = None):
+    """The terminal connection. With a config, the instance's own terminal and its own login
+    secrets are used: a live config never reads the demo account's (D-081)."""
     if fake:
         c = FakeMT5()
         c.initialize()
@@ -54,12 +63,14 @@ def _client(fake: bool):
     from goldtrader.secrets import get_secret
 
     c = RealMT5()
-    login = (get_secret("MT5_LOGIN", required=False) or "").strip()
-    password = get_secret("MT5_PASSWORD", required=False)
-    server = (get_secret("MT5_SERVER", required=False) or "").strip()
-    kwargs = {}
+    login = (get_secret(_sname(cfg, "MT5_LOGIN"), required=False) or "").strip()
+    password = get_secret(_sname(cfg, "MT5_PASSWORD"), required=False)
+    server = (get_secret(_sname(cfg, "MT5_SERVER"), required=False) or "").strip()
+    kwargs: dict = {}
+    if cfg is not None and cfg.account.terminal_path:
+        kwargs["path"] = cfg.account.terminal_path
     if login.isdigit() and password and server:
-        kwargs = {"login": int(login), "password": password, "server": server}
+        kwargs.update(login=int(login), password=password, server=server)
     else:
         typer.echo(
             "MT5 credentials incomplete or malformed (run goldctl doctor); using the account the "
@@ -366,12 +377,20 @@ def gateway(
         conn = connect(db)
         migrate(conn)
         repo = Repo(conn)
-        client = _client(fake)
-        token = get_secret("GATEWAY_TOKEN", required=False)
+        client = _client(fake, cfg)
+        token = get_secret(_sname(cfg, "GATEWAY_TOKEN"), required=False)
         from goldtrader.feeds.calendar_store import CalendarStore
 
         events_fn = CalendarStore(conn).events_fn(lambda: int(__import__("time").time() * 1000))
-        svc = GatewayService(client, cfg, repo, token=token, port=port, events_fn=events_fn)
+        svc = GatewayService(
+            client,
+            cfg,
+            repo,
+            token=token,
+            port=port,
+            events_fn=events_fn,
+            allow_live=bool(get_secret("ALLOW_LIVE", required=False)),
+        )
         svc.start()
         repo.heartbeat("gateway", "started", {"port": svc.api.port if svc.api else None})
         try:  # prices missed while the gateway was not running (D-067)
@@ -457,7 +476,7 @@ def brain(
         conn = connect(db)
         migrate(conn)
         repo = Repo(conn)
-        token = get_secret("GATEWAY_TOKEN", required=False)
+        token = get_secret(_sname(cfg, "GATEWAY_TOKEN"), required=False)
         if token is None and (state_dir / "gateway.token").exists():
             token = (state_dir / "gateway.token").read_text().strip()
         if token is None:
@@ -480,7 +499,7 @@ def brain(
             raise typer.Exit(code=2)
         sender = None
         chat_id = get_secret("TELEGRAM_OWNER_CHAT_ID", required=False)
-        tg_token = get_secret("TELEGRAM_BOT_TOKEN", required=False)
+        tg_token = get_secret(_sname(cfg, "TELEGRAM_BOT_TOKEN"), required=False)
         chat_updates = None
         if chat_id and tg_token:
             from goldtrader.chat.telegram_loop import HttpTelegramUpdates
@@ -533,7 +552,11 @@ def brain(
 
 @app.command("status")
 def status(
-    db: Path = typer.Option(Path("state/demo.sqlite")), gateway_url: str = "http://127.0.0.1:8750"
+    db: Path = typer.Option(Path("state/demo.sqlite")),
+    gateway_url: str = "http://127.0.0.1:8750",
+    config: Path | None = typer.Option(
+        None, help="The instance's config (needed to reach the live instance's gateway)"
+    ),
 ) -> None:
     """Owner summary: heartbeats, open incidents, kill switch, positions, last cycle, today's P&L."""
     from goldtrader.db.connect import now_ms
@@ -556,8 +579,9 @@ def status(
     lines.append(
         f"open incidents: {len(inc)}" + (" " + ", ".join(i["kind"] for i in inc) if inc else "")
     )
-    token = get_secret("GATEWAY_TOKEN", required=False)
-    tok_file = Path("state/gateway.token")
+    inst = _load(config) if config is not None else None
+    token = get_secret(_sname(inst, "GATEWAY_TOKEN"), required=False)
+    tok_file = Path(inst.data.db_dir if inst is not None else "state") / "gateway.token"
     if token is None and tok_file.exists():
         token = tok_file.read_text().strip()
     if token:
@@ -1217,7 +1241,7 @@ def dashboard(
         raise typer.Exit(code=2)
     ExitLog(state_dir / "dashboard.exit.log").install("dashboard")
     with acquire("dashboard", state_dir):
-        token = get_secret("GATEWAY_TOKEN", required=False)
+        token = get_secret(_sname(cfg, "GATEWAY_TOKEN"), required=False)
         if token is None and (state_dir / "gateway.token").exists():
             token = (state_dir / "gateway.token").read_text().strip()
         # a short timeout: the page must still load from the database when the gateway is down
@@ -1431,7 +1455,7 @@ def doctor(
     import platform
     import sys
 
-    from goldtrader.secrets import KNOWN, get_secret, inspect_secret
+    from goldtrader.secrets import KNOWN, SCOPED, get_secret, inspect_secret
 
     rows: list[tuple[str, bool, str]] = []
     rows.append(("python", sys.version_info >= (3, 12), platform.python_version()))
@@ -1450,8 +1474,10 @@ def doctor(
                 else f"missing: {e}",
             )
         )
+    env = "demo"
     try:
         cfg = load_config(config)
+        env = cfg.account.environment
         rows.append(
             (
                 "config",
@@ -1477,7 +1503,9 @@ def doctor(
             continue
         value = get_secret(name, required=False)
         present = value is not None
-        required = name in ("MT5_LOGIN", "MT5_PASSWORD", "MT5_SERVER")
+        if name.endswith("_LIVE") != (env == "live") and name.removesuffix("_LIVE") in SCOPED:
+            continue  # the other instance's copy
+        required = name.removesuffix("_LIVE") in ("MT5_LOGIN", "MT5_PASSWORD", "MT5_SERVER")
         summary, problems = inspect_secret(value)
         rows.append(
             (
@@ -1734,9 +1762,10 @@ def spec_dump(
     fake: bool = typer.Option(True, "--fake/--real"),
     symbol: str | None = None,
     db: Path | None = None,
+    config: Path | None = typer.Option(None, help="Use this instance's terminal and login"),
 ) -> None:
     """Read symbol_info() and account_info(); store them when --db is given (R-001, KU-001)."""
-    client = _client(fake)
+    client = _client(fake, _load(config) if config is not None else None)
     try:
         sym = symbol or find_gold_symbol(client, preferred="XAUUSDm")
         spec = read_spec(client, sym)

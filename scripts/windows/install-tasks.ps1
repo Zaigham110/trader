@@ -9,7 +9,13 @@ param(
   [string]$Config = "config\demo.yaml",
   [string]$Db = "state\demo.sqlite",
   [string]$Provider = "fake",     # "anthropic" once Phase 5 is approved for demo
-  [switch]$SignalsIpv6            # reach Telegram over IPv6 (networks that block it over IPv4)
+  [switch]$SignalsIpv6,           # reach Telegram over IPv6 (networks that block it over IPv4)
+  # A second instance next to the demo one (D-081), for example the live account:
+  #   -Suffix "-live" -Config config\live.yaml -Db state_live\live.sqlite -GatewayPort 8751 -DashboardPort 8761 -Provider anthropic -NoSignals
+  [string]$Suffix = "",           # appended to every task name
+  [int]$GatewayPort = 8750,
+  [int]$DashboardPort = 8760,
+  [switch]$NoSignals              # one Telegram login serves one signal reader: only the first instance runs it
 )
 $ErrorActionPreference = "Stop"   # a failed registration must stop the script, not print "Registered"
 $admin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
@@ -26,26 +32,29 @@ $settings = New-ScheduledTaskSettingsSet -RestartCount 999 -RestartInterval (New
   -ExecutionTimeLimit (New-TimeSpan -Days 365) -StartWhenAvailable -MultipleInstances IgnoreNew `
   -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries  # a laptop on battery must still start and keep running
 $trigger = New-ScheduledTaskTrigger -AtLogOn
+$gwUrl = "http://127.0.0.1:$GatewayPort"
 
-$gw = New-ScheduledTaskAction -Execute $py -Argument "gateway --real --config $Config --db $Db" -WorkingDirectory $Repo
-Register-ScheduledTask -TaskName "goldtrader-gateway" -Action $gw -Trigger $trigger -Settings $settings -Force | Out-Null
+$gw = New-ScheduledTaskAction -Execute $py -Argument "gateway --real --config $Config --db $Db --port $GatewayPort" -WorkingDirectory $Repo
+Register-ScheduledTask -TaskName "goldtrader-gateway$Suffix" -Action $gw -Trigger $trigger -Settings $settings -Force | Out-Null
 
-$br = New-ScheduledTaskAction -Execute $py -Argument "brain --provider $Provider --config $Config --db $Db" -WorkingDirectory $Repo
-Register-ScheduledTask -TaskName "goldtrader-brain" -Action $br -Trigger $trigger -Settings $settings -Force | Out-Null
+$br = New-ScheduledTaskAction -Execute $py -Argument "brain --provider $Provider --config $Config --db $Db --gateway-url $gwUrl" -WorkingDirectory $Repo
+Register-ScheduledTask -TaskName "goldtrader-brain$Suffix" -Action $br -Trigger $trigger -Settings $settings -Force | Out-Null
 
-$dash = New-ScheduledTaskAction -Execute $py -Argument "dashboard --config $Config --db $Db" -WorkingDirectory $Repo
-Register-ScheduledTask -TaskName "goldtrader-dashboard" -Action $dash -Trigger $trigger -Settings $settings -Force | Out-Null
+$dash = New-ScheduledTaskAction -Execute $py -Argument "dashboard --config $Config --db $Db --gateway-url $gwUrl --port $DashboardPort" -WorkingDirectory $Repo
+Register-ScheduledTask -TaskName "goldtrader-dashboard$Suffix" -Action $dash -Trigger $trigger -Settings $settings -Force | Out-Null
 
-$names = "goldtrader-gateway, goldtrader-brain and goldtrader-dashboard"
-if (Test-Path (Join-Path $Repo "state\telegram_user.session")) {
+$names = "goldtrader-gateway$Suffix, goldtrader-brain$Suffix and goldtrader-dashboard$Suffix"
+if ($NoSignals) {
+  Write-Host "Signal reader not registered for this instance (-NoSignals)."
+} elseif (Test-Path (Join-Path $Repo "state\telegram_user.session")) {
   $sigArgs = "signals --config $Config --db $Db" + $(if ($SignalsIpv6) { " --ipv6" } else { "" })
   $sig = New-ScheduledTaskAction -Execute $py -Argument $sigArgs -WorkingDirectory $Repo
-  Register-ScheduledTask -TaskName "goldtrader-signals" -Action $sig -Trigger $trigger -Settings $settings -Force | Out-Null
-  $names += ", plus goldtrader-signals (start it the same way)"
+  Register-ScheduledTask -TaskName "goldtrader-signals$Suffix" -Action $sig -Trigger $trigger -Settings $settings -Force | Out-Null
+  $names += ", plus goldtrader-signals$Suffix (start it the same way)"
 } else {
   Write-Host "Signal reader not registered: no Telegram login yet (goldctl signals-login), then run this script again."
 }
 Write-Host "Registered $names. Start them with:"
-Write-Host "  Start-ScheduledTask goldtrader-gateway; Start-Sleep 10; Start-ScheduledTask goldtrader-brain; Start-ScheduledTask goldtrader-dashboard"
-Write-Host "Stop:   Stop-ScheduledTask goldtrader-brain; Stop-ScheduledTask goldtrader-gateway"
-Write-Host "Status: .venv\Scripts\goldctl status    Dashboard (this PC only): http://127.0.0.1:8760"
+Write-Host "  Start-ScheduledTask goldtrader-gateway$Suffix; Start-Sleep 10; Start-ScheduledTask goldtrader-brain$Suffix; Start-ScheduledTask goldtrader-dashboard$Suffix"
+Write-Host "Stop:   Stop-ScheduledTask goldtrader-brain$Suffix; Stop-ScheduledTask goldtrader-gateway$Suffix"
+Write-Host "Status: .venv\Scripts\goldctl status --db $Db --gateway-url $gwUrl --config $Config    Dashboard (this PC only): http://127.0.0.1:$DashboardPort"

@@ -124,11 +124,25 @@ class RealMT5:
             raise MT5Error("MetaTrader5 package is Windows-only; use FakeMT5 on Linux") from exc
         self._mt5 = mt5
         self._point_cache: dict[str, float] = {}
+        self._init_args: dict[str, Any] | None = None
 
     # ------------------------------------------------------------------ connection
     def initialize(
         self, path=None, login=None, password=None, server=None, timeout=60000, portable=False
     ) -> bool:
+        if path is None and login is None and self._init_args is not None:
+            # a bare re-initialise must reach the same terminal and account as the first
+            # call, not whichever terminal happens to be the default (D-081)
+            path, login, password, server = (
+                self._init_args[k] for k in ("path", "login", "password", "server")
+            )
+        else:
+            self._init_args = {
+                "path": path,
+                "login": login,
+                "password": password,
+                "server": server,
+            }
         kwargs: dict[str, Any] = {"timeout": timeout, "portable": portable}
         if login is not None:
             kwargs.update(login=int(login), password=password, server=server)
