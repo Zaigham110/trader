@@ -119,7 +119,14 @@ def test_gate_entry_rejections():
         == "spread"
     )
     assert gate_entry(_gi(_prop(), features=None), CFG, STRAT).reason == "no_atr"
-    ex = gate_entry(_gi(_prop(action="exit")), CFG, STRAT)
-    assert ex.ok and ex.intent.kind == "exit"
-    mv = gate_entry(_gi(_prop(action="move_stop", new_stop_price=3990.0)), CFG, STRAT)
-    assert mv.ok and mv.intent.new_stop_price == 3990.0
+    # exit and move_stop name the open position, or the gateway would refuse them as invalid
+    ex = gate_entry(_gi(_prop(action="exit"), position_id=77), CFG, STRAT)
+    assert ex.ok and ex.intent.kind == "exit" and ex.intent.position_id == 77
+    mv = gate_entry(
+        _gi(_prop(action="move_stop", new_stop_price=3990.0), position_id=77), CFG, STRAT
+    )
+    assert mv.ok and mv.intent.new_stop_price == 3990.0 and mv.intent.position_id == 77
+    for act in ("exit", "move_stop"):  # no position, or more than one: nothing is sent
+        out = gate_entry(_gi(_prop(action=act, new_stop_price=3990.0)), CFG, STRAT)
+        assert not out.ok and out.reason == "no_single_open_position" and out.intent is None
+    assert gate_entry(_gi(_prop(), position_id=77), CFG, STRAT).intent.position_id is None

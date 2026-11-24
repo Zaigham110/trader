@@ -31,6 +31,9 @@ class GateInput:
     bid: float
     ask: float
     now_ms: int
+    # the one open position, which `exit` and `move_stop` act on; None when there is none or
+    # more than one (the agent's answer does not say which, so the gate does not guess)
+    position_id: int | None = None
 
 
 @dataclass(frozen=True)
@@ -56,6 +59,10 @@ def gate_entry(
     r = cfg.owner.risk
     if p.action == "wait":
         return GateOutcome(False, "wait")
+    if p.action in ("exit", "move_stop") and g.position_id is None:
+        # without a position number the gateway refuses the intent as invalid: all 14 stop
+        # moves the agent proposed up to 2026-11-24 were lost that way
+        return GateOutcome(False, "no_single_open_position")
     if p.action == "exit":
         return GateOutcome(True, "exit", _intent(g, "exit"))
     if p.action == "move_stop":
@@ -120,6 +127,7 @@ def _intent(
         side=side,
         stop_price=stop,
         target_price=target,
+        position_id=g.position_id if kind in ("exit", "move_stop") else None,
         new_stop_price=new_stop,
         reason=g.proposal.thesis[:300],
         source="strategy_bot",

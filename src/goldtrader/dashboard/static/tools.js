@@ -178,7 +178,9 @@ function drawLink() {
   b.className = "link " + state;
   b.lastChild.textContent = age === Infinity ? "connecting" : state === "ok" ? "Live" : age > 30 ? "No data " + Math.round(age) + "s" : !gwOk ? "Gateway down" : "Delayed " + Math.round(age) + "s";
   b.title = "Newest data " + (age === Infinity ? "not received yet" : Math.round(age) + " s old") + (gwOk ? "" : "; the gateway is not reachable");
-  if (state === "bad" && !AL.linkBad) { AL.linkBad = true; alert_("Dashboard lost its data", "The server has not answered for 30 seconds.", "bad"); }
+  // Old data alone is not an alarm: a browser slows the timers of a tab in the background to one a
+  // minute, so the data ages past 30 s while the server is fine. Alarm only when a request failed.
+  if (state === "bad" && snapFailed && !AL.linkBad) { AL.linkBad = true; alert_("Dashboard lost its data", "The server has not answered for 30 seconds.", "bad"); }
   if (state !== "bad") AL.linkBad = false;
 }
 
@@ -300,5 +302,6 @@ const _drawTradesTools = drawTrades;
 drawTrades = function () { _drawTradesTools(); drawPnlCalendar(); };
 const _ovHook = GT.hooks.overview;
 GT.hooks.overview = (...a) => { if (_ovHook) _ovHook(...a); loadRiskMini(); };
-setInterval(loadRiskMini, 10000); setInterval(drawLink, 1000); setInterval(countdown, 1000);
+setInterval(loadRiskMini, 10000); setInterval(drawLink, 1000);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) loadSnap(); });  // fresh data at once on return setInterval(countdown, 1000);
 loadRiskMini();

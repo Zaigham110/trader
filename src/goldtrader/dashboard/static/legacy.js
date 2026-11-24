@@ -17,7 +17,7 @@ function ago(ms, now) {
   return Math.round(s / 86400) + "d ago";
 }
 
-let snap = null, candles = [], minutes = 1, hoverX = null, lastOk = 0;
+let snap = null, candles = [], minutes = 1, hoverX = null, lastOk = 0, snapFailed = false;
 const liveRunning = new Set();
 const calm = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
@@ -334,8 +334,13 @@ function render() { if (!snap) return; renderHeader(snap); renderAccount(snap); 
 /* ---------- data ---------- */
 async function get(path) { const r = await fetch(path, {cache: "no-store"}); if (!r.ok) throw new Error(path + " " + r.status); return r.json(); }
 async function loadSnap() {
-  try { snap = await get("/api/snapshot"); lastOk = Date.now(); render(); }
-  catch (e) { const b = $("banner"); b.textContent = "Dashboard server is not answering. Last update " + (lastOk ? hm(lastOk) : "never") + "."; b.classList.add("show"); }
+  try {
+    // its own time limit: a request that hangs counts as a failure, as a refused one does
+    const r = await fetch("/api/snapshot", {cache: "no-store", signal: AbortSignal.timeout(20000)});
+    if (!r.ok) throw new Error("snapshot " + r.status);
+    snap = await r.json(); lastOk = Date.now(); snapFailed = false; render();
+  }
+  catch (e) { snapFailed = true; const b = $("banner"); b.textContent = "Dashboard server is not answering. Last update " + (lastOk ? hm(lastOk) : "never") + "."; b.classList.add("show"); }
   $("foot").textContent = "This page cannot open a trade or change a limit. Pause, kill switch, close and stop-to-entry each ask you to confirm. Updated " + (lastOk ? new Date(lastOk).toLocaleTimeString() : "never") + ".";
 }
 async function loadBars() { try { const b = await get("/api/bars?minutes=" + minutes + "&limit=240"); candles = b.candles; drawChart(); } catch (e) { /* the banner from loadSnap covers it */ } }

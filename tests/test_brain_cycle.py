@@ -485,3 +485,25 @@ def test_one_decision_never_sends_two_entries_even_if_the_agent_also_wants_in():
     assert res.status == "sent" and res.gate_reason == "code_only" and len(gw.intents) == 1
     agent = [p for p in _rows(conn, "proposals") if p["bot"] == "strategy"][0]
     assert (agent["gate_status"], agent["gate_reason"]) == ("gated", "already_entered")
+
+
+def test_stop_move_and_exit_from_the_agent_name_the_open_position():
+    pos = {"ticket": 555, "side": "long", "volume": 0.01, "price_open": 3990.0, "sl": 3950.0}
+    move = {**WAIT_PROPOSAL, "action": "move_stop", "new_stop_price": 3992.0}
+    for proposal, kind in ((move, "move_stop"), ({**WAIT_PROPOSAL, "action": "exit"}, "exit")):
+        gw = FakeGateway(state(open_positions=1, positions=[pos]))
+        cyc, reg, fake, conn, _ = _cycle(gw, signal=0)
+        fake.script("fast", [RISK_OK])
+        fake.script("standard", [proposal])
+        res = cyc.run_once()
+        assert res.status == "sent" and res.gate_reason == kind, (res.status, res.gate_reason)
+        (it,) = gw.intents
+        assert it.kind == kind and it.position_id == 555
+    # with no position there is nothing to act on: gated, and nothing reaches the gateway
+    gw = FakeGateway(state())
+    cyc, reg, fake, conn, _ = _cycle(gw, signal=0)
+    fake.script("fast", [RISK_OK])
+    fake.script("standard", [move])
+    res = cyc.run_once()
+    assert res.status == "gated" and res.gate_reason == "no_single_open_position"
+    assert gw.intents == []

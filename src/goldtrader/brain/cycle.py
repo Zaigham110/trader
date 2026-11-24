@@ -263,6 +263,7 @@ class DecisionCycle:
             bid=state.bid if state.bid is not None else 0.0,
             ask=state.ask if state.ask is not None else 0.0,
             now_ms=now,
+            position_id=(int(state.positions[0]["ticket"]) if len(state.positions) == 1 else None),
         )
         outcome = gate_entry(gi, self.cfg, strat)
         res.gate_reason = outcome.reason
