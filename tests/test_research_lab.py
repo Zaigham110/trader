@@ -285,22 +285,53 @@ def test_code_made_rules_are_always_valid():
 def test_agent_output_becomes_a_plain_rule():
     from goldtrader.bots import lab_agent
 
-    idea = lab_agent.LabIdea.model_validate(
-        {
-            "entry": {"type": "fade", "minutes": 15, "lookback": 20, "z_entry": 2.5},
-            "filters": [{"type": "hours", "from_hour": 0, "to_hour": 7}],
-            "exit": {"stop_atr": 3, "target_atr": 4.5, "use_target": True},
-            "rationale": "Quiet Asian hours tend to revert after a stretched close.",
-            "expectation": "Positive in all three periods; a trending Asia session disproves it.",
-        }
-    )
+    doc = {
+        "entry": {
+            "type": "fade",
+            "settings": [{"name": "minutes", "value": 15}, {"name": "z_entry", "value": 2.5}],
+        },
+        "filters": [
+            {
+                "type": "hours",
+                "settings": [{"name": "from", "value": 0}, {"name": "to", "value": 7}],
+                "choice": "",
+                "days": [],
+            },
+            {"type": "side", "settings": [], "choice": "short", "days": []},
+        ],
+        "exit": {
+            "stop_atr": 3,
+            "target_atr": 4.5,
+            "settings": [{"name": "trail_atr", "value": 2}],
+            "use_target": True,
+            "on_opposite": "hold",
+        },
+        "rationale": "Quiet Asian hours tend to revert after a stretched close.",
+        "expectation": "Positive in all three periods; a trending Asia session disproves it.",
+    }
+    idea = lab_agent.LabIdea.model_validate(doc)
     rule = rules.validate(lab_agent.to_rule(idea), 6.0)
-    assert (
-        rule["filters"] == [{"type": "hours", "from": 0, "to": 7}]
-        and "use_target" not in rule["exit"]
-    )
-    with pytest.raises(Exception):  # noqa: B017 - pydantic refuses fields outside the language
-        lab_agent.LabIdea.model_validate({**idea.model_dump(), "code": "print(1)"})
+    assert rule["entry"] == {"type": "fade", "minutes": 15, "z_entry": 2.5}
+    assert rule["filters"] == [
+        {"type": "hours", "from": 0, "to": 7},
+        {"type": "side", "only": "short"},
+    ]
+    assert rule["exit"] == {"stop_atr": 3.0, "target_atr": 4.5, "trail_atr": 2.0}
+    # a setting the language does not have is refused by validation, by name
+    doc["entry"]["settings"].append({"name": "leverage", "value": 50})
+    with pytest.raises(rules.RuleError, match="leverage"):
+        rules.validate(lab_agent.to_rule(lab_agent.LabIdea.model_validate(doc)), 6.0)
+    with pytest.raises(Exception):  # noqa: B017 - pydantic refuses fields outside the format
+        lab_agent.LabIdea.model_validate({**doc, "code": "print(1)"})
+
+    # the provider refuses an output format with more than 24 optional fields
+    def optional(schema):
+        n = 0
+        for d in [schema, *schema.get("$defs", {}).values()]:
+            n += len(set(d.get("properties", {})) - set(d.get("required", [])))
+        return n
+
+    assert optional(lab_agent.LabOut.model_json_schema()) == 0
     ctx = {
         "profile": {},
         "funnel": {},

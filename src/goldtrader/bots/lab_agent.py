@@ -63,39 +63,30 @@ PROMPT = register(
 )
 
 
+class Setting(BaseModel):
+    """One numeric setting of a block, by its name in the rule language."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=24)
+    value: float
+
+
 class EntryBlock(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     type: Literal["trend_flip", "trend_bars", "breakout", "pullback", "fade", "session_range"]
-    minutes: int | None = None
-    ema_fast: int | None = None
-    ema_slow: int | None = None
-    on_cross: int | None = None
-    lookback: int | None = None
-    trend_minutes: int | None = None
-    z_entry: float | None = None
-    range_start_hour: int | None = None
-    range_end_hour: int | None = None
-    trade_start_hour: int | None = None
-    trade_end_hour: int | None = None
+    settings: list[Setting] = Field(max_length=6)
 
 
 class FilterBlock(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     type: Literal["htf_trend", "hours", "vol", "side", "range_pos", "weekday"]
-    minutes: int | None = None
-    fast: int | None = None
-    slow: int | None = None
-    mode: Literal["with", "against"] | None = None
-    from_hour: int | None = None
-    to_hour: int | None = None
-    min_pctile: float | None = None
-    max_pctile: float | None = None
-    only: Literal["long", "short"] | None = None
-    lookback_minutes: int | None = None
-    max: float | None = None
-    days: list[int] | None = None
+    settings: list[Setting] = Field(max_length=4)
+    # htf_trend: "with" or "against"; side: "long" or "short"; every other filter: ""
+    choice: Literal["", "with", "against", "long", "short"]
+    days: list[int] = Field(max_length=6)  # weekday only, else empty
 
 
 class ExitBlock(BaseModel):
@@ -103,18 +94,17 @@ class ExitBlock(BaseModel):
 
     stop_atr: float = Field(gt=0)
     target_atr: float = Field(gt=0)
-    trail_atr: float | None = None
-    trail_after_r: float | None = None
-    breakeven_at_r: float | None = None
-    use_target: bool | None = None
-    on_opposite: Literal["hold", "close", "reverse"] | None = None
+    # optional extras by name: trail_atr, trail_after_r, breakeven_at_r
+    settings: list[Setting] = Field(max_length=3)
+    use_target: bool
+    on_opposite: Literal["hold", "close", "reverse"]
 
 
 class LabIdea(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     entry: EntryBlock
-    filters: list[FilterBlock] = Field(default_factory=list, max_length=3)
+    filters: list[FilterBlock] = Field(max_length=3)
     exit: ExitBlock
     rationale: str = Field(min_length=30, max_length=600)
     expectation: str = Field(min_length=10, max_length=300)
@@ -128,27 +118,37 @@ class LabLesson(BaseModel):
 
 
 class LabOut(BaseModel):
+    """Every field is required (an empty list where there is nothing): the provider limits how
+    many optional fields an output format may have."""
+
     model_config = ConfigDict(extra="forbid")
 
-    lessons: list[LabLesson] = Field(default_factory=list, max_length=MAX_LESSONS)
-    ideas: list[LabIdea] = Field(default_factory=list, max_length=MAX_IDEAS)
+    lessons: list[LabLesson] = Field(max_length=MAX_LESSONS)
+    ideas: list[LabIdea] = Field(max_length=MAX_IDEAS)
 
 
 def to_rule(idea: LabIdea) -> dict[str, Any]:
-    """The idea as a plain rule document for `research.rules.validate` (unset fields dropped;
-    the model's `from_hour` / `to_hour` are the language's `from` / `to`)."""
-    entry = {k: v for k, v in idea.entry.model_dump().items() if v is not None}
+    """The idea as a plain rule document for `research.rules.validate`. A setting the language
+    does not know is passed through, so validation names it in its refusal."""
+    entry: dict[str, Any] = {"type": idea.entry.type}
+    entry.update({x.name: x.value for x in idea.entry.settings})
     filters = []
     for f in idea.filters:
-        d = {k: v for k, v in f.model_dump().items() if v is not None}
-        if "from_hour" in d:
-            d["from"] = d.pop("from_hour")
-        if "to_hour" in d:
-            d["to"] = d.pop("to_hour")
+        d: dict[str, Any] = {"type": f.type}
+        d.update({x.name: x.value for x in f.settings})
+        if f.type == "htf_trend" and f.choice:
+            d["mode"] = f.choice
+        elif f.type == "side":
+            d["only"] = f.choice
+        elif f.type == "weekday":
+            d["days"] = list(f.days)
         filters.append(d)
-    ex = {k: v for k, v in idea.exit.model_dump().items() if v is not None}
-    if ex.get("use_target") is True:
-        ex.pop("use_target")
+    ex: dict[str, Any] = {"stop_atr": idea.exit.stop_atr, "target_atr": idea.exit.target_atr}
+    ex.update({x.name: x.value for x in idea.exit.settings})
+    if not idea.exit.use_target:
+        ex["use_target"] = False
+    if idea.exit.on_opposite != "hold":
+        ex["on_opposite"] = idea.exit.on_opposite
     return {"entry": entry, "filters": filters, "exit": ex}
 
 
@@ -161,8 +161,13 @@ def messages(ctx: dict[str, Any]) -> list[dict[str, Any]]:
         f"The funnel so far:\n{j(ctx['funnel'])}\n\n"
         f"The notebook, newest first (results in R; periods A, B, C are three separate stretches "
         f"of history):\n{j(ctx['notebook'])}\n\n"
-        f"The rule language (blocks and [low, high] ranges). In a filter of type hours use "
-        f"from_hour and to_hour:\n{j(ctx['grammar'])}\n\n"
+        f"The rule language (blocks and [low, high] ranges):\n{j(ctx['grammar'])}\n\n"
+        "How to write a block: numeric settings go in its `settings` list as {name, value} "
+        "using the names above (for example {name: minutes, value: 15}); leave a setting out "
+        "to take its default. In a filter, `choice` is with/against for htf_trend, long/short "
+        "for side and an empty string otherwise; `days` is used by weekday only. In the exit, "
+        "trail_atr, trail_after_r and breakeven_at_r go in `settings`; use_target is true "
+        "unless only a trailing stop should close the trade; on_opposite is normally hold.\n\n"
         f"Owner's stop limit: stop_atr at most {ctx['stop_atr_max']}.\n\n"
         f"Write the lessons, then propose at most {ctx.get('max_ideas', MAX_IDEAS)} new rules, as "
         "LabOut JSON."

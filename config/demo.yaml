@@ -39,3 +39,9 @@ owner:
     # the stop 0.27 x that distance (1.5 of the rule's 5.5 x ATR) behind the best price.
     trail_after_r: 2.0
     trail_distance_r: 0.27
+
+# D-085 research lab: the research agent proposes rules and writes lessons each night.
+# Its spending has its own daily budget and never counts against the trading agents.
+lab:
+  use_ai: true
+  daily_usd: 1.0
