@@ -106,9 +106,10 @@ function renderHeader(s) {
   for (const p of s.processes) pills.appendChild(pill(p.process + (p.stale ? " stale " + Math.round(p.age_s) + "s" : " " + p.status), p.stale ? "bad" : (p.status === "ok" ? "ok" : "warn")));
   if (gw) {
     pills.appendChild(pill("session " + gw.session, gw.session === "OPEN" ? "ok" : "warn"));
-    const canEnter = gw.entries_allowed && !gw.paused && !gw.kill_switch; pills.appendChild(pill(canEnter ? "entries allowed" : "entries blocked", canEnter ? "ok" : "warn"));
+    const lossPause = gw.cooldown_until_ms > s.now_ms; const canEnter = gw.entries_allowed && !gw.paused && !gw.kill_switch && !lossPause; pills.appendChild(pill(canEnter ? "entries allowed" : "entries blocked", canEnter ? "ok" : "warn"));
     if (gw.kill_switch) pills.appendChild(pill("KILL SWITCH ON", "bad"));
     if (gw.paused) pills.appendChild(pill("paused", "warn"));
+    if (lossPause) pills.appendChild(pill("loss pause until " + hm(gw.cooldown_until_ms), "warn"));
   }
   pills.appendChild(pill(s.incidents.length + " open incident" + (s.incidents.length === 1 ? "" : "s"), s.incidents.length ? "bad" : "ok"));
   pills.appendChild(pill("AI cost today $" + f2(s.costs.today), ""));
