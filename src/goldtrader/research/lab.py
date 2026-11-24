@@ -4,8 +4,11 @@
     2 periods     a positive average result (in R) and a positive net in each of three periods
     3 robust      still positive with the spread 1.5 times wider, and with the stop and the
                   target each nudged 20% up and down
-    4 luck        better than the same exits with random entries, and still credible after
-                  counting every rule ever tested (deflated Sharpe ratio)
+    4 luck        four checks (D-086): better than random entries in the same hours with the
+                  same exits in all 20 runs; the entry alone beats random bars matched for
+                  hour and volatility; the average per trade stays above zero when whole
+                  trading days are resampled; and the result is still credible after counting
+                  every rule ever tested (deflated Sharpe ratio)
     5 blind       positive on data no experiment has touched
 
 All thresholds are constants in this file; no agent can change one. Gates 1 to 4 use the
@@ -39,26 +42,29 @@ MIN_PER_PERIOD = 25
 STRESS_SPREAD = 1.5
 NUDGE = 0.2
 RANDOM_RUNS = 20
-RANDOM_MUST_BEAT = 19  # of RANDOM_RUNS: about the 95th percentile
+# All of them: the rule ranks first of 21, a chance of 1 in 21 (4.8%) if it were no better than
+# random entries. 19 of 20 would be about 1 in 10 (D-086).
+RANDOM_MUST_BEAT = 20
+ENTRY_HORIZONS = (15, 60, 120)  # minutes after a signal at which the entry alone is judged
+ENTRY_SIMS = 1000
+ENTRY_MAX_P = 0.05  # after allowing for the three horizons
+BOOT_SIMS = 2000
 MIN_DSR = 0.90
 MIN_BLIND_TRADES = 30
 GATES = ("trades", "periods", "robust", "luck", "blind")
 
 
 class RandomEntries:
-    """The benchmark of gate 4: as many signals as the rule gave, with the same share of longs,
-    at random bars. Run through the same exits, it shows what the exits alone are worth."""
+    """The benchmark of gate 4: as many signals as the rule gave, in the same hours of the day and
+    with the same sides, at random bars. Run through the same exits, it shows what the exits and
+    the choice of hours alone are worth; the rule has to add something on top."""
 
     kind = "random"
 
-    def __init__(self, like: Any, n_signals: int, long_share: float, seed: int) -> None:
-        self.like, self.n, self.long_share, self.seed, self.id = (
-            like,
-            n_signals,
-            long_share,
-            seed,
-            "r",
-        )
+    def __init__(self, like: Any, hours: Any, sides: Any, seed: int) -> None:
+        self.like, self.seed, self.id = like, seed, "r"
+        self.hours = np.asarray(hours, dtype=int)
+        self.sides = np.asarray(sides, dtype=np.int8)
 
     def signals(self, df: Any) -> Any:
         from dataclasses import replace
@@ -66,11 +72,32 @@ class RandomEntries:
         base = self.like.signals(df)
         rng = np.random.default_rng(self.seed)
         side = np.zeros(len(df), dtype=np.int8)
-        n = min(self.n, len(df) - 2)
-        if n > 0:
-            idx = rng.choice(len(df) - 1, size=n, replace=False)
-            side[idx] = np.where(rng.random(n) < self.long_share, 1, -1)
+        hour = df["hour_utc"].to_numpy()[:-1]
+        sides = rng.permutation(self.sides)
+        k = 0
+        for h in np.unique(self.hours):
+            pool = np.flatnonzero(hour == h)
+            n = min(int((self.hours == h).sum()), len(pool))
+            if n:
+                side[rng.choice(pool, size=n, replace=False)] = sides[k : k + n]
+            k += n
         return replace(base, side=side)
+
+
+def day_bootstrap_lower(rs: list[float], days: list[int], sims: int = BOOT_SIMS) -> float:
+    """The 5th percentile of the average result per trade when whole trading days are resampled.
+    Trades of one day share that day's market, so days, not trades, are what is independent."""
+    if not rs:
+        return 0.0
+    by: dict[int, list[float]] = {}
+    for r, d in zip(rs, days, strict=True):
+        by.setdefault(int(d), []).append(float(r))
+    sums = np.array([sum(v) for v in by.values()])
+    counts = np.array([len(v) for v in by.values()])
+    rng = np.random.default_rng(12345)
+    pick = rng.integers(0, len(sums), size=(sims, len(sums)))
+    means = sums[pick].sum(axis=1) / counts[pick].sum(axis=1)
+    return float(np.quantile(means, 0.05))
 
 
 class Lab:
@@ -99,6 +126,7 @@ class Lab:
                 "rs": [],
                 "signals": 0,
                 "longs": 0.5,
+                "days": [],
             }
         cost = CostModel(
             spread_multiplier=spread,
@@ -116,7 +144,55 @@ class Lab:
             "win": round(float((tr["net_pnl"] > 0).mean()), 3) if len(tr) else 0.0,
             "rs": rs,
             "longs": float((tr["side"] == "long").mean()) if len(tr) else 0.5,
+            "days": [int(x) // 86400 for x in tr["entry_time"]] if len(tr) else [],
         }
+
+    def entry_test(self, df: Any, strategy: Any) -> dict[str, Any]:
+        """Does the entry alone say anything? For every signal the rule gives (also those it could
+        not trade because a position was open), the price move in the signal's direction over the
+        next 15, 60 and 120 minutes, in ATR and after the spread, against random bars from the same
+        hour of the day and the same third of volatility, with the same sides. No stop, no target.
+        `p` is the share of ENTRY_SIMS random draws that did at least as well; `p_adjusted` is the
+        smallest p times the number of horizons."""
+        side = strategy.signals(df).side
+        mid = df["mid_close"].to_numpy(dtype=float)
+        atr = df["atr"].to_numpy(dtype=float)
+        cost = (df["spread_close"] / df["atr"]).to_numpy(dtype=float)
+        strata = df["hour_utc"].to_numpy(dtype=int) * 3 + np.minimum(
+            2, (df["atr_pctile"].fillna(0.5).to_numpy(dtype=float) * 3).astype(int)
+        )
+        ok = np.isfinite(atr) & (atr > 0) & np.isfinite(cost)
+        out: dict[str, Any] = {"signals": int((side != 0).sum()), "horizons": {}}
+        rng = np.random.default_rng(2026)
+        best_p = 1.0
+        for h in ENTRY_HORIZONS:
+            n = len(mid) - h
+            if n < 100:
+                continue
+            move = np.full(len(mid), np.nan)
+            move[:n] = (mid[h:] - mid[:n]) / atr[:n]
+            valid = ok & np.isfinite(move)
+            sig = np.flatnonzero((side != 0) & valid)
+            if len(sig) < 30:
+                continue
+            s_side = side[sig].astype(float)
+            real = float(np.mean(s_side * move[sig] - cost[sig]))
+            pools = {k: np.flatnonzero(valid & (strata == k)) for k in np.unique(strata[sig])}
+            groups = [(pools[k], int((strata[sig] == k).sum())) for k in pools]
+            rand = np.empty(ENTRY_SIMS)
+            for i in range(ENTRY_SIMS):
+                idx = np.concatenate([rng.choice(pool, size=k) for pool, k in groups])
+                rand[i] = np.mean(rng.permutation(s_side) * move[idx] - cost[idx])
+            pv = float((1 + (rand >= real).sum()) / (ENTRY_SIMS + 1))
+            best_p = min(best_p, pv)
+            out["horizons"][str(h)] = {
+                "n": int(len(sig)),
+                "mean_atr": round(real, 4),
+                "random_mean_atr": round(float(rand.mean()), 4),
+                "p": round(pv, 4),
+            }
+        out["p_adjusted"] = round(min(1.0, best_p * max(1, len(out["horizons"]))), 4)
+        return out
 
     def _part(self, df: Any, lo: int, hi: int) -> Any:
         return df[(df["time"] >= lo) & (df["time"] < hi)]
@@ -156,6 +232,8 @@ class Lab:
                 f"needs {MIN_TRADES} in all and {MIN_PER_PERIOD} in each",
             )
         out["gate"] = 1
+        disc = self._part(df, self.cuts[0], self.cuts[3])
+        out["entry"] = self.entry_test(disc, strat)
         bad = [i for i, p in enumerate(periods) if p["mean_r"] <= 0 or p["net"] <= 0]
         if bad:
             return fail("periods", "not positive in period " + ", ".join("ABC"[i] for i in bad))
@@ -165,7 +243,6 @@ class Lab:
             return out
 
         # 3: wider spread, nudged stop and target, over the whole discovery window
-        disc = self._part(df, self.cuts[0], self.cuts[3])
         checks: dict[str, float] = {}
         checks[f"spread x{STRESS_SPREAD:g}"] = self._run(disc, strat, opts, spread=STRESS_SPREAD)[
             "net"
@@ -191,13 +268,15 @@ class Lab:
             return fail("robust", "loses with " + ", ".join(weak))
         out["gate"] = 3
 
-        # 4: better than luck
+        # 4: better than luck, four ways (D-086)
         base = self._run(disc, strat, opts)
-        n_sig = int((strat.signals(disc).side != 0).sum())
+        sig_side = strat.signals(disc).side
+        at = np.flatnonzero(sig_side != 0)
+        hours = disc["hour_utc"].to_numpy()[at]
         beaten = 0
         rnd = []
         for seed in range(RANDOM_RUNS):
-            r = self._run(disc, RandomEntries(strat, n_sig, base["longs"], 1000 + seed), opts)
+            r = self._run(disc, RandomEntries(strat, hours, sig_side[at], 1000 + seed), opts)
             rnd.append(r["mean_r"])
             beaten += base["mean_r"] > r["mean_r"]
         arr = np.asarray(base["rs"], dtype=float)
@@ -207,16 +286,37 @@ class Lab:
         skew = float(((arr - arr.mean()) ** 3).mean() / sd**3) if sd > 0 else 0.0
         kurt = float(((arr - arr.mean()) ** 4).mean() / sd**4) if sd > 0 else 3.0
         dsr = float(stats.deflated_sharpe(sr, max(1, n_trials), var, len(arr), skew, kurt))
+        lower = day_bootstrap_lower(base["rs"], base["days"])
+        entry_p = float(out["entry"].get("p_adjusted", 1.0))
         out["luck"] = {
             "beats_random": beaten,
             "of": RANDOM_RUNS,
             "random_mean_r": round(float(np.mean(rnd)), 4),
+            "entry_p": entry_p,
+            "by_day_lower_r": round(lower, 4),
+            "trading_days": len(set(base["days"])),
             "sharpe_per_trade": round(sr, 4),
             "deflated_sharpe": round(dsr, 4) if math.isfinite(dsr) else 0.0,
             "rules_counted": n_trials,
         }
         if beaten < RANDOM_MUST_BEAT:
-            return fail("luck", f"beat random entries in only {beaten} of {RANDOM_RUNS} runs")
+            return fail(
+                "luck",
+                f"beat random entries in the same hours in only {beaten} of {RANDOM_RUNS} runs "
+                f"(needs all {RANDOM_MUST_BEAT})",
+            )
+        if entry_p > ENTRY_MAX_P:
+            return fail(
+                "luck",
+                "the entry alone does no better than random bars from the same hours and "
+                f"volatility (p {entry_p:.2f}, needs {ENTRY_MAX_P} or less)",
+            )
+        if lower <= 0:
+            return fail(
+                "luck",
+                f"resampling whole trading days, the average per trade can be {lower:+.2f} R "
+                "or worse: not reliably above zero",
+            )
         if not math.isfinite(dsr) or dsr < MIN_DSR:
             return fail(
                 "luck",

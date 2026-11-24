@@ -6,7 +6,7 @@ const LAB_GATE = [
   ["trades", "Enough trades", "At least 100 trades on history, and 25 in each of three periods. Fewer says nothing either way."],
   ["periods", "Three periods", "A positive average result and a positive net in each of three separate periods."],
   ["robust", "Robust", "Still positive with the spread 1.5 times wider and with the stop and target moved 20% each way."],
-  ["luck", "Beats luck", "Better than random entries with the same exits, and still credible after counting every rule ever tried."],
+  ["luck", "Beats luck", "Four checks: better than random entries in the same hours in all 20 runs; the entry alone beats matched random bars; the average stays above zero when whole trading days are resampled; and the result is still credible after counting every rule ever tried."],
   ["blind", "Blind test", "Positive on prices no experiment has touched. Only data from 24 November 2026 onward counts."],
 ];
 const LAB_SOURCE = {agent: "AI agent", optimiser: "made by code", owner: "owner", seed: "seed"};
@@ -56,7 +56,8 @@ function drawLab(d) {
       if (x.expectation) para(td, "What was expected:", x.expectation);
       if (res.why) para(td, "Outcome:", res.why + ".");
       if (res.robust) para(td, "Net result under stress (USD):", Object.entries(res.robust).map(([a, b]) => a + " " + signed(b)).join(" · "));
-      if (res.luck) para(td, "Against luck:", "beat random entries in " + res.luck.beats_random + " of " + res.luck.of + " runs; credibility after counting " + res.luck.rules_counted + " rules tried: " + res.luck.deflated_sharpe.toFixed(2) + " (needs 0.90).");
+      if (res.entry && res.entry.horizons) { const hs = Object.entries(res.entry.horizons).map(([h, v]) => h + " min: " + (v.mean_atr >= 0 ? "+" : "") + v.mean_atr.toFixed(2) + " ATR against " + (v.random_mean_atr >= 0 ? "+" : "") + v.random_mean_atr.toFixed(2) + " for random (p " + v.p.toFixed(2) + ")").join(" · "); if (hs) para(td, "The entry alone, after the spread:", hs + "."); }
+      if (res.luck) para(td, "Against luck:", "beat random entries in " + res.luck.beats_random + " of " + res.luck.of + " runs (needs all)" + (res.luck.entry_p != null ? "; entry-only p " + res.luck.entry_p.toFixed(2) + " (needs 0.05 or less)" : "") + (res.luck.by_day_lower_r != null ? "; by-day lower bound " + (res.luck.by_day_lower_r >= 0 ? "+" : "") + res.luck.by_day_lower_r.toFixed(2) + " R over " + res.luck.trading_days + " days (needs above 0)" : "") + "; credibility after counting " + res.luck.rules_counted + " rules tried: " + res.luck.deflated_sharpe.toFixed(2) + " (needs 0.90).");
       if (res.blind) para(td, "Blind data:", res.blind.n + " trades, " + rTxt(res.blind.mean_r) + " per trade.");
       if (x.paper_bundle) para(td, "On paper as:", x.paper_bundle);
       if (x.lesson) para(td, "Lesson:", x.lesson);

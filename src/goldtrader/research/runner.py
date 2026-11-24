@@ -224,6 +224,8 @@ def _brief(n: dict[str, Any]) -> dict[str, Any]:
     for k in ("robust", "luck", "blind"):
         if r.get(k):
             out[k] = r[k]
+    if r.get("entry"):
+        out["entry_only"] = r["entry"]
     if n["rationale"]:
         out["rationale"] = n["rationale"]
     if n["lesson"]:

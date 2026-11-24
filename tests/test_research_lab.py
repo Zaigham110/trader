@@ -133,6 +133,7 @@ class _FakeLab(lab.Lab):
         a, b = int(t.iloc[0]), int(t.iloc[-1]) + 1
         self.cuts = [a + (b - a) // 4, a + (b - a) // 2, a + 3 * (b - a) // 4, b - 600]
         self.calls = []
+        self.entry_p = 0.01
         self.discovery = (t >= self.cuts[0]) & (t < self.cuts[3])
 
     def _run(self, df, strategy, opts, spread=1.0):
@@ -155,8 +156,15 @@ class _FakeLab(lab.Lab):
             "win": 0.4,
             "rs": rs,
             "longs": 0.5,
+            "days": [k % 40 for k in range(n)],
         }
 
+
+def _scripted_entry(self, df, strategy):
+    return {"signals": 100, "horizons": {}, "p_adjusted": self.entry_p}
+
+
+_FakeLab.entry_test = _scripted_entry
 
 SPEC_OK = rules.validate(
     {"entry": {"type": "trend_flip"}, "filters": [], "exit": {"stop_atr": 4, "target_atr": 8}}
@@ -179,9 +187,32 @@ def test_gates_stop_at_the_first_failure_in_order():
     assert r["failed_at"] == "robust" and "stop x1.2" in r["why"]
     r = gate(lambda w, k, s, e: (0.3 if k == "random" else 0.2, 60))
     assert (r["gate"], r["failed_at"]) == (3, "luck") and "random entries" in r["why"]
-    # a thin edge is not credible once thousands of rules have been tried, a fat one is
-    thin = gate(lambda w, k, s, e: (0.0 if k == "random" else 0.04, 60), n_trials=5000)
-    assert thin["failed_at"] == "luck" and "not credible" in thin["why"]
+    # beating random entries in 19 of 20 runs is a 1-in-10 result: all 20 are needed
+    calls = {"n": 0}
+
+    def one_better(w, k, s, e):
+        if k != "random":
+            return (0.5, 200)
+        calls["n"] += 1
+        return (0.9 if calls["n"] == 7 else 0.0, 200)
+
+    r = gate(one_better, n_trials=5)
+    assert (
+        r["failed_at"] == "luck" and r["luck"]["beats_random"] == 19 and "needs all 20" in r["why"]
+    )
+    # an entry that predicts nothing by itself
+    lab_ = _FakeLab(lambda w, k, s, e: (0.0 if k == "random" else 0.5, 200))
+    lab_.entry_p = 0.4
+    r = lab_.evaluate(SPEC_OK, n_trials=5)
+    assert r["failed_at"] == "luck" and "entry alone" in r["why"] and r["luck"]["entry_p"] == 0.4
+    # a small average over few trading days is not reliably above zero
+    thin = gate(lambda w, k, s, e: (0.0 if k == "random" else 0.04, 60), n_trials=5)
+    assert thin["failed_at"] == "luck" and "not reliably above zero" in thin["why"]
+    assert thin["luck"]["by_day_lower_r"] < 0 and thin["luck"]["trading_days"] == 40
+    # a real but modest edge is not credible once thousands of rules have been tried
+    many = gate(lambda w, k, s, e: (0.0 if k == "random" else 0.12, 200), n_trials=5000)
+    assert many["failed_at"] == "luck" and "not credible" in many["why"]
+    assert many["luck"]["by_day_lower_r"] > 0
     fat = gate(
         lambda w, k, s, e: (0.0 if k == "random" else 0.5, 200 if w != "blind" else 5), n_trials=5
     )
@@ -382,3 +413,67 @@ def test_dashboard_reads_the_notebook_and_paper_ledger_runs_a_lab_rule():
         )
     with pytest.raises(rules.RuleError):
         ledger.register("paper", "lab_z", LAB_KIND, {"entry": {"type": "nope"}})
+
+
+def test_day_bootstrap_and_matched_random_entries():
+    # every day the same small gain: reliably above zero; pure noise: not
+    days = [d for d in range(40) for _ in range(3)]
+    assert lab.day_bootstrap_lower([0.2] * 120, days) == pytest.approx(0.2)
+    rng = np.random.default_rng(0)
+    noise = list(rng.normal(0.0, 1.5, 120))
+    assert lab.day_bootstrap_lower(noise, days) < 0
+    # one great day does not make a rule: 39 flat days and a single +30 R day
+    lumpy = [0.0] * 117 + [10.0] * 3
+    assert lab.day_bootstrap_lower(lumpy, days) == 0.0
+    assert lab.day_bootstrap_lower([], []) == 0.0
+
+    df = _frame(6)
+    spec = rules.validate({"entry": {"type": "trend_flip"}, "filters": [], "exit": GOOD["exit"]})
+    strat = rules.Composed(spec)
+    side = strat.signals(df).side
+    at = np.flatnonzero(side != 0)
+    hours = df["hour_utc"].to_numpy()[at]
+    rnd = lab.RandomEntries(strat, hours, side[at], seed=3).signals(df).side
+    got = np.flatnonzero(rnd != 0)
+    assert len(got) == len(at) and (rnd[got] > 0).sum() == (side[at] > 0).sum()
+    assert np.array_equal(
+        np.bincount(df["hour_utc"].to_numpy()[got], minlength=24), np.bincount(hours, minlength=24)
+    )
+    assert not np.array_equal(got, at)  # other bars, same hours and sides
+
+
+def test_entry_only_test_tells_foresight_from_noise():
+    from dataclasses import replace
+
+    df = _frame(12)
+    cfg = parse_config({"owner": {"risk": {"stop_atr_max": 6.0}}})
+    L = lab.Lab.__new__(lab.Lab)
+    L.cfg, L.spec, L.events, L.stop_max, L.full = cfg, SPEC, [], 6.0, df
+    base = rules.Composed(SPEC_OK)
+
+    class Peek:  # cheats: signals in the direction the price is about to go
+        id, kind = "peek", "test"
+
+        def signals(self, d):
+            mid = d["mid_close"].to_numpy()
+            side = np.zeros(len(d), dtype=np.int8)
+            fut = np.sign(mid[60:] - mid[:-60])
+            pick = np.arange(0, len(d) - 60, 37)
+            side[pick] = fut[pick].astype(np.int8)
+            return replace(base.signals(d), side=side)
+
+    class Coin:  # no information at all
+        id, kind = "coin", "test"
+
+        def signals(self, d):
+            rng = np.random.default_rng(5)
+            side = np.zeros(len(d), dtype=np.int8)
+            pick = np.arange(0, len(d) - 200, 37)
+            side[pick] = rng.choice([-1, 1], size=len(pick))
+            return replace(base.signals(d), side=side)
+
+    seen = L.entry_test(df, Peek())
+    assert seen["horizons"]["60"]["p"] < 0.01 and seen["p_adjusted"] <= 0.01
+    assert seen["horizons"]["60"]["mean_atr"] > seen["horizons"]["60"]["random_mean_atr"]
+    blind = L.entry_test(df, Coin())
+    assert blind["p_adjusted"] > 0.05 and set(blind["horizons"]) == {"15", "60", "120"}
