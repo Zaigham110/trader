@@ -185,8 +185,82 @@ def agents(conn: sqlite3.Connection, now_ms: int) -> list[dict[str, Any]]:
                 "cost_today": float(t.get("cost_usd") or 0.0),
             }
         )
+    card = _lab_agent_card(conn, now_ms, day)
+    if card is not None:
+        out.append(card)
     out.extend(_code_agents(conn, now_ms, day))
     return out
+
+
+LAB_AGENT = (
+    "lab_research",
+    "Research lab",
+    "Looks for a trading rule with a real edge, each night",
+)
+
+
+def _lab_agent_card(conn: sqlite3.Connection, now_ms: int, day: int) -> dict[str, Any] | None:
+    """The research agent (D-085) as a card. Its model calls are recorded in the lab's own ledger,
+    not in this database, so the card is built from the lab's session log and notebook."""
+    if not table_exists(conn, "research_runs"):
+        return None
+    last = _one(
+        conn,
+        "SELECT id, started_ms, finished_ms, status, proposed, tested, passed_gate2, passed_gate4, "
+        "cost_usd, summary_json FROM research_runs ORDER BY id DESC LIMIT 1",
+    )
+    n_today, cost_today = conn.execute(
+        "SELECT COUNT(*), COALESCE(SUM(cost_usd), 0) FROM research_runs WHERE started_ms >= ?",
+        (day,),
+    ).fetchone()
+    total, lessons, on_paper = conn.execute(
+        "SELECT COUNT(*), SUM(lesson IS NOT NULL), SUM(paper_bundle IS NOT NULL) FROM research_ideas"
+    ).fetchone()
+    run = None
+    running = False
+    if last is not None:
+        info = _loads(last.pop("summary_json"), {}) or {}
+        ag = info.get("agent") or {}
+        running = last["status"] == "running" and now_ms - last["started_ms"] < 3 * 3_600_000
+        text = (
+            f"Session in progress: {total or 0} rules in the notebook so far."
+            if running
+            else f"Last session tested {last['tested']} rules: {last['passed_gate2']} positive in all "
+            f"three periods, {last['passed_gate4']} past four gates. "
+            + (
+                f"The agent proposed {ag.get('ideas', 0)} and wrote {ag.get('lessons', 0)} lessons. "
+                if ag.get("on")
+                else "The agent was off, so the rules were made by code. "
+            )
+            + f"In all: {total or 0} rules tested, {lessons or 0} lessons, {on_paper or 0} on paper. "
+            "Details are on the Research lab page."
+        )
+        run = {
+            "run_id": f"lab-{last['id']}",
+            "started_ms": last["started_ms"],
+            "finished_ms": last["finished_ms"],
+            "status": "ok" if last["status"] in ("done", "running") else last["status"],
+            "turns": 1,
+            "cost_usd": float(last["cost_usd"] or 0.0),
+            "degraded": False,
+            "failure_reason": None,
+            "summary": text,
+        }
+    return {
+        "key": LAB_AGENT[0],
+        "label": LAB_AGENT[1],
+        "role": LAB_AGENT[2],
+        "kind": "llm",
+        "model": None,
+        "running": running,
+        "last": run,
+        "breaker": "closed",
+        "breaker_failures": 0,
+        "calls_today": int(n_today or 0),
+        "failed_today": 0,
+        "cost_today": float(cost_today or 0.0),
+        "page": "lab",
+    }
 
 
 def _code_agents(conn: sqlite3.Connection, now_ms: int, day: int) -> list[dict[str, Any]]:

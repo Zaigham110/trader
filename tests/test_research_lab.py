@@ -365,6 +365,9 @@ def test_dashboard_reads_the_notebook_and_paper_ledger_runs_a_lab_rule():
         "agent": {"n": 1, "past_periods": 0}
     }
     assert d["best"][0]["spec"]["entry"]["type"] == "pullback" and d["runs"][0]["status"] == "done"
+    card = next(c for c in data.agents(conn, 5) if c["key"] == "lab_research")
+    assert card["label"] == "Research lab" and "tested 1 rules" in card["last"]["summary"]
+    assert "made by code" in card["last"]["summary"] and not card["running"]
 
     # the paper ledger accepts a lab rule, keeps its exit block and refuses what it cannot simulate
     cfg = parse_config({"owner": {"risk": {"stop_atr_max": 6.0}}})

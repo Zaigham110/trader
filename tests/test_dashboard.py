@@ -100,7 +100,9 @@ def test_snapshot_shape_and_agent_cards(tmp_path):
     procs = {p["process"]: p for p in snap["processes"]}
     assert not procs["gateway"]["stale"] and procs["brain"]["stale"]
     cards = {a["key"]: a for a in snap["agents"]}
-    assert set(cards) == {k for k, _, _ in data.LLM_AGENTS + data.CODE_AGENTS}
+    expected = {k for k, _, _ in data.LLM_AGENTS + data.CODE_AGENTS} | {data.LAB_AGENT[0]}
+    assert set(cards) == expected
+    assert cards["lab_research"]["last"] is None and cards["lab_research"]["page"] == "lab"
     s = cards["strategy"]
     assert s["last"]["summary"].startswith("WAIT (confidence 0.8): Signal is flat")
     assert s["breaker"] == "open" and s["model"] == "claude-sonnet-5-5" and s["calls_today"] == 1

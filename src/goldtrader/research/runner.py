@@ -272,6 +272,7 @@ def run_session(
     rng = random.Random(seed if seed is not None else start)
     cost = 0.0
     proposed: list[int] = []
+    agent: dict[str, Any] = {"on": propose_fn is not None, "ideas": 0, "lessons": 0, "refused": 0}
 
     # 1. the agent: lessons for what was tested last time, then new rules
     if propose_fn is not None:
@@ -293,8 +294,11 @@ def run_session(
                                    expectation=i["expectation"], now_ms=now_ms(), stop_atr_max=stop_max)  # fmt: skip
             if iid is not None:
                 proposed.append(iid)
+                agent["ideas"] += 1
             else:
+                agent["refused"] += 1
                 log(f"agent rule refused: {why}")
+        agent["lessons"] = len(lessons)
 
     # 2. rules made by code, to fill the session
     best = conn.execute(
@@ -376,6 +380,7 @@ def run_session(
     summary = {"proposed": len(proposed), "tested": len(todo), "passed_gate2": len(survivors),
                "full_gates_run": len(jobs), "passed_gate4": passed4, "funnel": funnel(conn),
                "still_waiting_for_full_gates": max(0, len(ranked) - len(jobs))}  # fmt: skip
+    summary["agent"] = agent
     conn.execute(
         "UPDATE research_runs SET finished_ms=?, status='done', proposed=?, tested=?, passed_gate2=?, "
         "passed_gate4=?, cost_usd=?, summary_json=? WHERE id=?",
