@@ -299,3 +299,17 @@ tr.more[hidden]{display:none}
 .small{font-size:11.5px}
 .worked .para{max-width:760px}
 .linkbtn{display:inline-block;text-decoration:none;margin-top:8px}
+
+/* ----- risk and health page ----- */
+.pills.left{margin-left:0;margin-bottom:12px}
+.meters{display:flex;flex-direction:column;gap:14px}
+.meter-top{display:flex;justify-content:space-between;gap:12px;align-items:baseline;font-size:13.5px}
+.meter-k{font-weight:600}
+.bar-track.big{height:10px;margin:5px 0 4px}
+.bar-track i.mid{background:var(--warn)}
+.check{display:grid;grid-template-columns:76px 1fr;gap:10px;align-items:start;padding:8px 0;border-top:1px solid var(--line)}
+.check-mark{font-size:10.5px;font-weight:700;letter-spacing:.06em;padding:3px 6px;border-radius:6px;text-align:center;border:1px solid var(--line)}
+.check.ok .check-mark{color:var(--up);border-color:rgba(46,189,133,.5)}
+.check.no .check-mark{color:var(--warn);border-color:var(--warn)}
+.costday{padding:7px 0;border-bottom:1px solid var(--line)}
+.costday:last-child{border-bottom:0}

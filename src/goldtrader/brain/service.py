@@ -389,6 +389,16 @@ class BrainService:
         veto.store(
             self.repo.c, veto.REPORT_NAME, veto.build(self.repo.c, self.cfg, self.strat, now), now
         )
+        # the go-live checklist for the dashboard's Risk & health page (D-083); the dashboard
+        # itself loads no trading code, so it reads the stored result
+        try:
+            from goldtrader.report.scorecard import go_live_checklist
+
+            checks = go_live_checklist(self.repo.c, self.cfg, now)
+            body = {"checks": [{"name": n, "ok": bool(ok), "detail": d} for n, ok, d in checks]}
+            veto.store(self.repo.c, "golive", body, now)
+        except Exception:  # noqa: BLE001 - a report must never stop the loop
+            log.exception("go-live checklist failed")
 
     def _learning_loop_job(self) -> None:
         """Learning loop (D-064): grade new signal decisions, judge the paper candidates and,

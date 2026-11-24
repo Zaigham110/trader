@@ -1017,3 +1017,196 @@ def results_by_bundle(conn: sqlite3.Connection) -> dict[str, dict[str, Any]]:
             "first_ms": r["first_ms"],
         }
     return out
+
+
+# ------------------------------------------------------------------ risk and health (D-083)
+def _meter(
+    key: str, label: str, used: float | None, limit: float | None, unit: str, text: str
+) -> dict:
+    pct = None if used is None or not limit else max(0.0, min(1.0, used / limit))
+    return {
+        "key": key,
+        "label": label,
+        "used": None if used is None else round(used, 2),
+        "limit": limit,
+        "unit": unit,
+        "pct": None if pct is None else round(pct, 3),
+        "text": text,
+    }
+
+
+def risk_page(
+    conn: sqlite3.Connection, now_ms: int, state: dict[str, Any] | None, limits: dict[str, Any]
+) -> dict[str, Any]:
+    """Every limit next to how much of it is used right now, and why entries were refused in the
+    last 7 days. `state` is the gateway's view (None when it cannot be reached)."""
+    g, r = state or {}, limits or {}
+    meters: list[dict[str, Any]] = []
+    if r:
+        eq, day0, week0, peak = (
+            g.get("equity"),
+            g.get("start_equity_day"),
+            g.get("start_equity_week"),
+            g.get("equity_peak"),
+        )
+        day_cap = day0 * r["daily_loss_pct"] / 100 if day0 else None
+        week_cap = week0 * r["weekly_loss_pct"] / 100 if week0 else None
+        meters.append(
+            _meter(
+                "day",
+                "Loss today",
+                max(0.0, -g["day_pnl"]) if "day_pnl" in g else None,
+                day_cap,
+                "USD",
+                f"New entries stop for the day once the account is down {r['daily_loss_pct']}% from where "
+                "it started the day (counting open trades).",
+            )
+        )
+        meters.append(
+            _meter(
+                "week",
+                "Loss this week",
+                max(0.0, -g["week_pnl"]) if "week_pnl" in g else None,
+                week_cap,
+                "USD",
+                f"New entries stop for the week once the account is down {r['weekly_loss_pct']}% from "
+                "where it started the week.",
+            )
+        )
+        dd = (peak - eq) / peak * 100 if peak and eq is not None else None
+        meters.append(
+            _meter(
+                "drawdown",
+                "Fall from the highest equity",
+                None if dd is None else max(0.0, dd),
+                r["max_drawdown_pct"],
+                "%",
+                "At this fall the kill switch closes everything and stops trading until you reset it.",
+            )
+        )
+        meters.append(
+            _meter(
+                "positions",
+                "Open positions",
+                g.get("open_positions"),
+                r["max_positions"],
+                "",
+                "A new entry is refused while this many positions are already open.",
+            )
+        )
+        meters.append(
+            _meter(
+                "spread",
+                "Spread now",
+                g.get("spread_pips"),
+                r["max_spread_pips"],
+                "pips",
+                "No entry while the gap between buy and sell price is above this.",
+            )
+        )
+        meters.append(
+            _meter(
+                "losses",
+                "Losses in a row",
+                g.get("consecutive_losses"),
+                r["consecutive_loss_pause"],
+                "",
+                f"After this many losing trades in a row, entries pause for {r['cooldown_min']} minutes.",
+            )
+        )
+        open_risk = conn.execute(
+            "SELECT MAX(risk_pct) FROM positions WHERE status='open'"
+        ).fetchone()[0]
+        meters.append(
+            _meter(
+                "trade",
+                "Risk on the open trade",
+                open_risk,
+                r["risk_per_trade_pct"],
+                "% of account",
+                "The most one trade may lose if its stop is hit. An entry that would risk more is refused.",
+            )
+        )
+    week = now_ms - 7 * 86_400_000
+    refused: dict[str, int] = {}
+    for code, n in conn.execute(
+        "SELECT risk_code, COUNT(*) FROM intents WHERE risk_code IS NOT NULL AND created_ms >= ? "
+        "GROUP BY 1",
+        (week,),
+    ):
+        refused[code] = refused.get(code, 0) + n
+    for reason, n in conn.execute(
+        "SELECT gate_reason, COUNT(*) FROM proposals WHERE gate_status='gated' AND created_ms >= ? "
+        "AND gate_reason IS NOT NULL GROUP BY 1",
+        (week,),
+    ):
+        key = "confidence" if reason.startswith("confidence") else reason
+        refused[key] = refused.get(key, 0) + n
+    cooldown = int(g.get("cooldown_until_ms") or 0)
+    return {
+        "now_ms": now_ms,
+        "reachable": state is not None,
+        "limits": r,
+        "meters": meters,
+        "cooldown_until_ms": cooldown if cooldown > now_ms else 0,
+        "kill_switch": bool(g.get("kill_switch")),
+        "paused": bool(g.get("paused")),
+        "entries_allowed": bool(g.get("entries_allowed")),
+        "session": g.get("session"),
+        "refused": sorted(refused.items(), key=lambda kv: -kv[1]),
+    }
+
+
+def health_page(conn: sqlite3.Connection, now_ms: int) -> dict[str, Any]:
+    """How reliably the system has been running: processes, the go-live checklist, alerts,
+    incidents, and what the AI calls cost per day and agent."""
+    week = now_ms - 7 * 86_400_000
+    cost_rows = rows(
+        conn.execute(
+            "SELECT strftime('%Y-%m-%d', created_ms / 1000, 'unixepoch') AS day, agent, "
+            "COUNT(*) AS calls, SUM(cost_usd) AS cost, "
+            "SUM(CASE WHEN status != 'ok' THEN 1 ELSE 0 END) AS failed "
+            "FROM llm_calls WHERE created_ms >= ? GROUP BY 1, 2 ORDER BY 1 DESC, 4 DESC",
+            (week,),
+        )
+    )
+    days: dict[str, dict[str, Any]] = {}
+    for c in cost_rows:
+        d = days.setdefault(
+            c["day"], {"day": c["day"], "cost": 0.0, "calls": 0, "failed": 0, "agents": []}
+        )
+        d["cost"] = round(d["cost"] + (c["cost"] or 0.0), 4)
+        d["calls"] += c["calls"]
+        d["failed"] += c["failed"]
+        d["agents"].append(
+            {"agent": c["agent"], "calls": c["calls"], "cost": round(c["cost"] or 0.0, 4)}
+        )
+    exits = (
+        rows(
+            conn.execute(
+                "SELECT process, exit_code, started_ms, exited_ms, reason FROM process_exits "
+                "ORDER BY exited_ms DESC LIMIT 30"
+            )
+        )
+        if table_exists(conn, "process_exits")
+        else []
+    )
+    return {
+        "now_ms": now_ms,
+        "processes": processes(conn, now_ms),
+        "golive": stored_report(conn, "golive"),
+        "exits": exits,
+        "alerts": rows(
+            conn.execute(
+                "SELECT created_ms, severity, kind, message, delivered_ms FROM alerts "
+                "WHERE kind != 'channel_signal' ORDER BY id DESC LIMIT 40"
+            )
+        ),
+        "incidents": rows(
+            conn.execute(
+                "SELECT opened_ms, severity, kind, summary, acknowledged_ms, closed_ms "
+                "FROM incidents ORDER BY id DESC LIMIT 30"
+            )
+        ),
+        "ai_cost": list(days.values()),
+    }

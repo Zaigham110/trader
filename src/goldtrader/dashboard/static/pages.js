@@ -414,7 +414,80 @@ async function loadStrategies() {
   if (!(snap && snap.gateway) && !ST.retry) { ST.retry = true; setTimeout(() => { if (GT.page === "strategies") buildStrategies(); }, 2500); }
 }
 
+/* ====================================================================== Risk & health page */
+const RK = {built: false};
+const REFUSED = {max_positions: "A position was already open", risk_per_trade: "The stop was too far for the risk limit", cooldown: "Paused after losses in a row", confidence: "The AI was not confident enough", daily_loss: "Daily loss limit reached", weekly_loss: "Weekly loss limit reached", spread_above_cap: "Spread too wide", spread: "Spread too wide", kill_switch: "Kill switch on", paused: "Paused by owner", already_entered: "This decision had already entered", session_closed: "Market closed", drawdown: "Drawdown limit reached", incident_open: "An incident was open", news_window: "Inside a news window"};
+const CHECK = {uptime: "Running in market hours", stops: "Every trade had a stop at the broker", crashes: "No crashes", incidents: "Incidents acknowledged", journal: "Every trade fully recorded", reconciliation: "Results match the broker's records", days: "Enough days of demo trading", trades: "Enough closed trades"};
+function buildRisk() {
+  const root = $("riskNew"); clear(root); RK.built = true;
+  const s1 = el("section", "grid g-2");
+  const m = card("Safety limits and how much of each is used"); m.appendChild(el("div")).id = "rkState"; m.appendChild(el("div", "meters")).id = "rkMeters"; s1.appendChild(m);
+  const rf = card("Why entries were refused in the last 7 days"); rf.appendChild(el("div")).id = "rkRefused";
+  rf.appendChild(el("div", "tm-note", "Each line is a rule doing its job: a signal arrived and code stopped it before any order was sent."));
+  s1.appendChild(rf); root.appendChild(s1);
+  const s2 = el("section", "grid g-2");
+  const gl = card("Ready for a live account?", "Go-live checklist"); gl.appendChild(el("div")).id = "rkGolive"; s2.appendChild(gl);
+  const pr = card("Processes"); pr.appendChild(el("div")).id = "rkProc"; pr.appendChild(el("h2", "sub", "Restarts by the watchdog and crashes")); pr.appendChild(el("div")).id = "rkExits"; s2.appendChild(pr);
+  root.appendChild(s2);
+  const s3 = el("section", "grid g-3");
+  for (const [id, title] of [["rkAlerts", "Alerts sent to you"], ["rkInc", "Incidents"], ["rkCost", "What the AI calls cost"]]) { const c = card(title); c.appendChild(el("div", "scroll")).id = id; s3.appendChild(c); }
+  root.appendChild(s3);
+}
+function drawRisk(r, h) {
+  const st = $("rkState"); clear(st);
+  const line = el("div", "pills left");
+  line.appendChild(pill(r.reachable ? "gateway connected" : "gateway not reachable", r.reachable ? "ok" : "bad"));
+  if (r.reachable) {
+    line.appendChild(pill(r.entries_allowed ? "new entries allowed" : "new entries blocked", r.entries_allowed ? "ok" : "warn"));
+    line.appendChild(pill(r.kill_switch ? "KILL SWITCH ON" : "kill switch off", r.kill_switch ? "bad" : "ok"));
+    if (r.paused) line.appendChild(pill("paused by owner", "warn"));
+    if (r.cooldown_until_ms) line.appendChild(pill("loss pause until " + hm(r.cooldown_until_ms), "warn"));
+  }
+  st.appendChild(line);
+  const box = $("rkMeters"); clear(box);
+  if (!r.meters.length) box.appendChild(el("div", "empty", "The limits are shown when the dashboard is started with a config."));
+  for (const m of r.meters) {
+    const row = el("div", "meter"), top = el("div", "meter-top");
+    top.appendChild(el("span", "meter-k", m.label));
+    const used = m.used == null ? "–" : (m.unit === "USD" ? f2(m.used) : String(m.used)), lim = m.limit == null ? "–" : (m.unit === "USD" ? f2(m.limit) : String(m.limit));
+    top.appendChild(el("span", "num", used + " of " + lim + (m.unit ? " " + m.unit : "")));
+    row.appendChild(top);
+    const track = el("span", "bar-track big"), fill = el("i", m.pct == null ? "" : m.pct >= 0.9 ? "neg" : m.pct >= 0.6 ? "mid" : "pos");
+    fill.style.width = (m.pct == null ? 0 : Math.max(1.5, m.pct * 100)) + "%"; track.appendChild(fill); row.appendChild(track);
+    row.appendChild(el("div", "dim small", m.text)); box.appendChild(row);
+  }
+  const rf = $("rkRefused"); clear(rf);
+  if (!r.refused.length) rf.appendChild(el("div", "empty", "No entry was refused in the last 7 days."));
+  else { const top = r.refused[0][1], b = el("div", "bars");
+    for (const [code, n] of r.refused) { const row = el("div", "bar-row"); row.appendChild(el("span", "bar-k", REFUSED[code] || code.replace(/_/g, " "))); const t = el("span", "bar-track"), i = el("i", "mid"); i.style.width = Math.max(2, n / top * 100) + "%"; t.appendChild(i); row.appendChild(t); row.appendChild(el("span", "bar-v num", String(n))); b.appendChild(row); }
+    rf.appendChild(b); }
+
+  const gl = $("rkGolive"); clear(gl);
+  if (!h.golive) gl.appendChild(el("div", "empty", "The checklist is worked out every 15 minutes by the brain; it will appear shortly."));
+  else { const pass = h.golive.checks.filter(c => c.ok).length;
+    gl.appendChild(el("div", "lead", pass + " of " + h.golive.checks.length + " checks pass. These are the project's own conditions for the end of demo trading; going live is still your decision."));
+    for (const c of h.golive.checks) { const row = el("div", "check " + (c.ok ? "ok" : "no")); row.appendChild(el("span", "check-mark", c.ok ? "PASS" : "NOT YET")); const x = el("div"); x.appendChild(el("b", null, CHECK[c.name] || c.name)); x.appendChild(el("div", "dim small", c.detail)); row.appendChild(x); gl.appendChild(row); } }
+
+  const pr = $("rkProc"); clear(pr); const pt = el("table"), ph = el("tr"); for (const c of ["Process", "State", "Last sign of life"]) ph.appendChild(el("th", null, c)); pt.appendChild(ph);
+  for (const p of h.processes) { const row = el("tr"); row.appendChild(el("td", null, p.process)); row.appendChild(el("td", p.stale ? "down" : "up", p.stale ? "not responding" : p.status)); row.appendChild(el("td", "num dim", Math.round(p.age_s) + " s ago")); pt.appendChild(row); }
+  pr.appendChild(pt);
+  const ex = $("rkExits"); clear(ex);
+  if (!h.exits.length) ex.appendChild(el("div", "empty", "None recorded."));
+  for (const e of h.exits) { const row = el("div", "row " + (e.reason === "stopped" || e.reason === "exited" ? "" : "bad")); row.appendChild(el("span", "t", dateHm(e.exited_ms))); const x = el("span", "x"); x.appendChild(el("span", "who", e.process)); x.appendChild(document.createTextNode(e.reason || "ended")); row.appendChild(x); ex.appendChild(row); }
+
+  const list = (id, items, empty, make) => { const b = $(id); clear(b); if (!items.length) b.appendChild(el("div", "empty", empty)); for (const it of items) b.appendChild(make(it)); };
+  list("rkAlerts", h.alerts, "No alerts yet.", a => { const row = el("div", "row " + (a.severity === "critical" ? "bad" : a.severity === "warning" ? "warn" : "")); row.appendChild(el("span", "t", dateHm(a.created_ms))); const x = el("span", "x"); x.appendChild(el("span", "who", a.kind.replace(/_/g, " "))); x.appendChild(document.createTextNode(a.message)); row.appendChild(x); return row; });
+  list("rkInc", h.incidents, "No incident has ever been opened.", i => { const row = el("div", "row " + (i.closed_ms ? "" : "bad")); row.appendChild(el("span", "t", dateHm(i.opened_ms))); const x = el("span", "x"); x.appendChild(el("span", "who", i.kind.replace(/_/g, " "))); x.appendChild(document.createTextNode(i.summary + (i.closed_ms ? " (closed " + dateHm(i.closed_ms) + ")" : " (OPEN)"))); row.appendChild(x); return row; });
+  list("rkCost", h.ai_cost, "No AI calls in the last 7 days.", d => { const w = el("div", "costday"); const top = el("div", "meter-top"); top.appendChild(el("b", null, d.day)); top.appendChild(el("span", "num", "$" + d.cost.toFixed(2) + " · " + d.calls + " calls" + (d.failed ? ", " + d.failed + " failed" : ""))); w.appendChild(top); w.appendChild(el("div", "dim small", d.agents.slice(0, 5).map(a => a.agent.replace(/_/g, " ") + " $" + a.cost.toFixed(2)).join(" · "))); return w; });
+}
+async function loadRisk() {
+  if (!RK.built) buildRisk();
+  try { const [r, h] = await Promise.all([get("/api/risk"), get("/api/health")]); drawRisk(r, h); } catch (e) { /* the banner covers a dead server */ }
+}
+
 /* ---------- wiring ---------- */
+GT.hooks.risk = () => loadRisk();
+setInterval(() => { if (GT.page === "risk" && !document.hidden) loadRisk(); }, 10000);
 GT.hooks.strategies = () => loadStrategies();
 window.addEventListener("resize", redrawDiagrams);
 setInterval(() => { if (GT.page === "strategies" && !document.hidden) loadStrategies(); }, 60000);

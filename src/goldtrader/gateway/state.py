@@ -216,6 +216,12 @@ class StateBuilder:
             spec_ok=self.flags.spec_ok,
             incident_open=self.flags.incident_open,
             day_pnl=account.day_pnl,
+            week_pnl=account.week_pnl,
+            start_equity_day=account.start_equity_day,
+            start_equity_week=account.start_equity_week,
+            equity_peak=account.equity_peak,
+            consecutive_losses=account.consecutive_losses,
+            cooldown_until_ms=account.cooldown_until_ms,
             positions=[
                 {
                     "ticket": p.ticket,

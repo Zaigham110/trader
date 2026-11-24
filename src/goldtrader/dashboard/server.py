@@ -193,6 +193,10 @@ class DashboardServer:
                         return self._json(200, {"instance": srv.instance, "symbol": srv.symbol})
                     if url.path == "/api/strategies":
                         return self._json(200, srv.strategies_info())
+                    if url.path == "/api/risk":
+                        return self._json(200, srv.risk_info())
+                    if url.path == "/api/health":
+                        return self._json(200, srv.read(data.health_page))
                     if url.path == "/api/trades":
                         q = parse_qs(url.query)
                         return self._json(200, srv.read(data.trades_page, _str(q, "period", "all")))
@@ -293,6 +297,16 @@ class DashboardServer:
             return fn(conn, self.symbol, *args)
         finally:
             conn.close()
+
+    def risk_info(self) -> dict[str, Any]:
+        state = None
+        if self.gateway is not None:
+            try:
+                st = self.gateway.state()
+                state = st.model_dump(mode="json") if st is not None else None
+            except Exception:  # noqa: BLE001 - an unreachable gateway is a fact, not a crash
+                state = None
+        return self.read(data.risk_page, state, self.risk)
 
     def strategies_info(self) -> dict[str, Any]:
         """The rules in plain words, what is configured, and the results so far."""

@@ -510,3 +510,74 @@ def test_trades_page_statistics_and_trade_detail(tmp_path):
         }
     finally:
         srv.stop()
+
+
+def test_risk_and_health_pages(tmp_path):
+    path = _db(tmp_path)
+    c = connect(path)
+    c.execute(
+        "INSERT INTO intents(intent_id, created_ms, kind, payload_json, status, risk_code) "
+        "VALUES ('i1', ?, 'enter', '{}', 'rejected', 'cooldown')",
+        (NOW - 1000,),
+    )
+    for pid, reason in (
+        ("g1", "confidence_0.50"),
+        ("g2", "confidence_0.55"),
+        ("g3", "max_positions"),
+    ):
+        c.execute(
+            "INSERT INTO proposals(proposal_id, created_ms, bot, action, raw_json, gate_status, "
+            "gate_reason) VALUES (?, ?, 'strategy', 'enter', '{}', 'gated', ?)",
+            (pid, NOW - 1000, reason),
+        )
+    c.execute(
+        "INSERT INTO stored_reports VALUES ('golive', ?, ?)",
+        (NOW, json.dumps({"checks": [{"name": "days", "ok": False, "detail": "6 of 28"}]})),
+    )
+    c.execute(
+        "INSERT INTO alerts(created_ms, severity, kind, message) VALUES (?, 'critical', "
+        "'gateway_stale', 'down'), (?, 'info', 'channel_signal', 'BUY gold')",
+        (NOW, NOW),
+    )
+    c.commit()
+    c.close()
+    conn = connect_readonly(path)
+    limits = {
+        "daily_loss_pct": 2.0, "weekly_loss_pct": 4.0, "max_drawdown_pct": 10.0, "max_positions": 1,
+        "max_spread_pips": 60.0, "consecutive_loss_pause": 3, "cooldown_min": 60,
+        "risk_per_trade_pct": 0.5,
+    }  # fmt: skip
+    state = {
+        "equity": 4950.0, "day_pnl": -50.0, "week_pnl": 10.0, "start_equity_day": 5000.0,
+        "start_equity_week": 4940.0, "equity_peak": 5500.0, "open_positions": 1,
+        "spread_pips": 24.0, "consecutive_losses": 2, "cooldown_until_ms": NOW + 60_000,
+        "kill_switch": False, "paused": False, "entries_allowed": True, "session": "OPEN",
+    }  # fmt: skip
+    r = data.risk_page(conn, NOW, state, limits)
+    json.dumps(r)
+    m = {x["key"]: x for x in r["meters"]}
+    assert m["day"]["used"] == 50.0 and m["day"]["limit"] == 100.0 and m["day"]["pct"] == 0.5
+    assert (
+        m["week"]["used"] == 0.0 and m["drawdown"]["used"] == 10.0 and m["drawdown"]["pct"] == 1.0
+    )
+    assert m["positions"]["pct"] == 1.0 and m["spread"]["pct"] == 0.4 and m["losses"]["used"] == 2
+    assert r["cooldown_until_ms"] == NOW + 60_000 and r["reachable"]
+    assert dict(r["refused"]) == {"confidence": 2, "cooldown": 1, "max_positions": 1}
+    down = data.risk_page(conn, NOW, None, limits)
+    assert not down["reachable"] and down["meters"][0]["used"] is None
+    assert data.risk_page(conn, NOW, state, {})["meters"] == []
+
+    h = data.health_page(conn, NOW)
+    json.dumps(h)
+    assert h["golive"]["checks"][0]["name"] == "days"
+    assert [a["kind"] for a in h["alerts"]] == ["gateway_stale"]  # channel signals are not alerts
+    assert h["ai_cost"][0]["calls"] == 1 and h["ai_cost"][0]["agents"][0]["agent"] == "strategy"
+    assert {p["process"] for p in h["processes"]} == {"gateway", "brain"}
+
+    srv = DashboardServer(path, Gateway(), port=0, clock_ms=lambda: NOW, risk=limits)
+    srv.start()
+    try:
+        assert len(json.loads(_get(srv.port, "/api/risk")[2])["meters"]) == 7
+        assert "processes" in json.loads(_get(srv.port, "/api/health")[2])
+    finally:
+        srv.stop()

@@ -130,3 +130,10 @@ class GatewayState(Strict):
     incident_open: bool
     day_pnl: float
     positions: list[dict] = Field(default_factory=list)
+    # what the loss limits, the drawdown limit and the loss pause are measured from (D-083)
+    week_pnl: float = 0.0
+    start_equity_day: float | None = None
+    start_equity_week: float | None = None
+    equity_peak: float | None = None
+    consecutive_losses: int = 0
+    cooldown_until_ms: int = 0
