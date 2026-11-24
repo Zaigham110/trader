@@ -26,7 +26,8 @@ if (-not (Have git)) { winget install --id Git.Git -e --accept-source-agreements
 Step "Python 3.12 (64-bit)"
 $pyOk = $false
 if (Have python) {
-  $v = (& python --version 2>&1)
+  # On a fresh Windows "python" is a Microsoft Store shortcut that only prints an error: treat that as "not installed".
+  try { $v = (& python --version 2>&1 | Out-String) } catch { $v = "" }
   if ($v -match "Python 3\.(1[2-9])") { $pyOk = $true }
 }
 if (-not $pyOk) { winget install --id Python.Python.3.12 -e --accept-source-agreements --accept-package-agreements | Out-Null }
@@ -46,7 +47,7 @@ git checkout $Branch
 git pull --ff-only origin $Branch
 
 Step "Virtual environment and package"
-if (-not (Test-Path ".venv")) { uv venv .venv }
+if (-not (Test-Path ".venv")) { uv venv --python 3.12 .venv }
 uv pip install -e ".[dev,windows]"
 
 Step "MetaTrader5 package import"
