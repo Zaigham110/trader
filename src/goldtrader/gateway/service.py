@@ -37,6 +37,7 @@ from goldtrader.session.state import SessionClock
 from goldtrader.types import SessionState
 
 log = logging.getLogger(__name__)
+LINK_ALERT_AFTER_MS = 120_000  # a broker link down this long is reported to the owner
 
 
 @dataclass
@@ -53,6 +54,8 @@ class GatewayCounters:
     last_account_ms: int = 0
     last_spec_check_ms: int = 0
     disconnected_since_ms: int | None = None
+    link_down_since_ms: int | None = None  # no broker connection, or no prices while open
+    link_alerted: bool = False
     last_error: str | None = None
     errors: int = 0
     discrepancies: list[str] = field(default_factory=list)
@@ -390,7 +393,52 @@ class GatewayService:
                 acted = True
         else:
             c.disconnected_since_ms = None
+        self._link_alert(snap, now)
         return acted
+
+    def _link_alert(self, snap: Snapshot, now: int) -> None:
+        """Tell the owner when the broker link is down (D-088). On 2026-11-24 the PC lost its
+        Wi-Fi for ten minutes with a position open and nobody was told: the gateway process was
+        alive, so the "gateway has not reported" alert had no reason to fire. One alert per
+        outage, and one when it ends. With the internet down the alert is delivered on return."""
+        c = self.counters
+        down = not snap.view.connected or snap.session is SessionState.STALE
+        if down:
+            if c.link_down_since_ms is None:
+                c.link_down_since_ms = now
+            if not c.link_alerted and now - c.link_down_since_ms >= LINK_ALERT_AFTER_MS:
+                what = (
+                    "The MT5 terminal has lost its connection to the broker"
+                    if not snap.view.connected
+                    else "No prices have arrived from the broker"
+                )
+                n = len(snap.positions)
+                held = (
+                    "No position is open."
+                    if n == 0
+                    else f"{n} open position(s): "
+                    + (
+                        "the stop is held at the broker."
+                        if all(p.sl != 0 for p in snap.positions)
+                        else "AT LEAST ONE HAS NO STOP."
+                    )
+                )
+                self.journal.alert(
+                    "critical",
+                    "broker_link_lost",
+                    f"{what} for {LINK_ALERT_AFTER_MS // 60_000} minutes. No new trades can be "
+                    f"opened and stops cannot be moved until it is back. {held}",
+                )
+                c.link_alerted = True
+            return
+        if c.link_alerted and c.link_down_since_ms is not None:
+            mins = (now - c.link_down_since_ms) / 60_000
+            self.journal.alert(
+                "info",
+                "broker_link_restored",
+                f"The broker link is back after {mins:.0f} minutes. Trading decisions resume.",
+            )
+        c.link_down_since_ms, c.link_alerted = None, False
 
     def _trail(self, snap: Snapshot, now: int) -> bool:
         """Trailing stop (D-076): once a trade has been `trail_after_r` x its original stop distance

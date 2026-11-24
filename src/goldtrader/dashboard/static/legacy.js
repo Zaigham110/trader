@@ -343,7 +343,7 @@ async function loadSnap() {
   catch (e) { snapFailed = true; const b = $("banner"); b.textContent = "Dashboard server is not answering. Last update " + (lastOk ? hm(lastOk) : "never") + "."; b.classList.add("show"); }
   $("foot").textContent = "This page cannot open a trade or change a limit. Pause, kill switch, close and stop-to-entry each ask you to confirm. Updated " + (lastOk ? new Date(lastOk).toLocaleTimeString() : "never") + ".";
 }
-async function loadBars() { try { const b = await get("/api/bars?minutes=" + minutes + "&limit=240"); candles = b.candles; drawChart(); } catch (e) { /* the banner from loadSnap covers it */ } }
+async function loadBars() { try { const b = await get("/api/bars?minutes=" + minutes + "&limit=600"); candles = b.candles; drawChart(); } catch (e) { /* the banner from loadSnap covers it */ } }
 function buildTf() {
   const box = $("tf");
   for (const [m, name] of [[1, "1m"], [5, "5m"], [15, "15m"], [60, "1h"]]) {

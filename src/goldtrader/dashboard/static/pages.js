@@ -493,6 +493,10 @@ drawChart = function () {   // replaces the hand-drawn canvas chart of legacy.js
   if (!host || !host.clientWidth || !window.LightweightCharts || !candles.length) return;
   if (!LV.ch) {
     LV.ch = makeChart(host);
+    // The chart keeps its bar width when its box grows (a wider window, cards loading beside it),
+    // which left the left third empty. With both edges fixed it cannot show space before the
+    // first candle or after the last: it widens the bars to fill the box instead.
+    LV.ch.applyOptions({timeScale: {fixLeftEdge: true, fixRightEdge: true}});
     LV.series = LV.ch.addSeries(LightweightCharts.CandlestickSeries, {upColor: css("--up"), downColor: css("--down"), borderVisible: false, wickUpColor: css("--up"), wickDownColor: css("--down"), priceLineColor: css("--gold")});
     LV.marks = LightweightCharts.createSeriesMarkers(LV.series, []);
     LV.ch.subscribeCrosshairMove(p => {
@@ -502,7 +506,7 @@ drawChart = function () {   // replaces the hand-drawn canvas chart of legacy.js
   }
   const span = minutes * 60, bar = c => ({time: c[0] + TZ_S, open: c[1], high: c[2], low: c[3], close: c[4]});
   const key = minutes + ":" + candles[0][0] + ":" + candles.length;
-  if (key !== LV.key) { LV.series.setData(candles.map(bar)); if (LV.tf !== minutes) { LV.ch.timeScale().fitContent(); LV.tf = minutes; } LV.key = key; }
+  if (key !== LV.key) { LV.series.setData(candles.map(bar)); if (LV.tf !== minutes) { LV.ch.timeScale().setVisibleLogicalRange({from: Math.max(0, candles.length - 240), to: candles.length}); LV.tf = minutes; } LV.key = key; }
   const last = bar(candles[candles.length - 1]), bid = snap && snap.gateway ? snap.gateway.bid : null;
   if (bid != null && Date.now() / 1000 - candles[candles.length - 1][0] < span * 2) { last.close = bid; last.high = Math.max(last.high, bid); last.low = Math.min(last.low, bid); }
   LV.series.update(last);
@@ -538,8 +542,11 @@ function drawOverview() {
   if (p) { const long = p.side === "long" || p.side === "buy", px = g ? (long ? g.bid : g.ask) : null;
     stat(k, "Open position", (long ? "Long " : "Short ") + p.volume + " @ " + f2(p.price_open), tone(p.profit), (p.profit != null ? signed(p.profit) + " USD now" : "") + (px != null && p.sl ? " · stop " + f2(Math.abs(px - p.sl)) + " away" : ""));
   } else stat(k, "Open position", "Flat", "", g && g.entries_allowed ? "waiting for a signal" : "new entries are blocked");
-  const why = c ? (DECISION[c.status] || c.status) + (c.gate_reason && c.status === "gated" ? " (" + (REFUSED[c.gate_reason] || c.gate_reason) + ")" : "") : "";
-  stat(k, "AI decision", c ? (DECISION_SHORT[c.status] || c.status) : "–", "ai", c ? hm(c.started_ms) + " · " + why : "no decision yet", why);
+  // "flat" has two causes; say which. The usual one is the daily AI budget, which is not a fault.
+  const spent = c && c.status === "flat" && /budget/.test(c.gate_reason || "");
+  const why = !c ? "" : spent ? "Today's AI budget is used up (" + c.gate_reason + "). The AI decides again after midnight UTC. The open position keeps its stop and target."
+    : (DECISION[c.status] || c.status) + (c.gate_reason && (c.status === "gated" || c.status === "flat") ? " (" + (REFUSED[c.gate_reason] || c.gate_reason) + ")" : "");
+  stat(k, "AI decision", !c ? "–" : spent ? "AI budget used up" : (DECISION_SHORT[c.status] || c.status), "ai", c ? hm(c.started_ms) + " · " + why : "no decision yet", why);
   stat(k, "Track record", all.n ? (all.hit_rate != null ? Math.round(all.hit_rate * 100) + "% wins" : all.n + " trades") : "–", all.n ? tone(all.net_pnl) : "", all.n ? all.n + " trades · net " + signed(all.net_pnl) + " USD" : "no closed trades yet");
   stat(k, "Next event", ev ? dateHm(ev.time_ms) : "none", ev && ev.impact === "high" ? "gold" : "", ev ? ev.title : "", ev ? ev.title + (ev.impact === "high" ? " (high impact: entries pause around it)" : "") : "");
 }

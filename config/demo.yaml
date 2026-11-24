@@ -40,6 +40,13 @@ owner:
     trail_after_r: 2.0
     trail_distance_r: 0.27
 
+# D-089: the trading agents may spend 5 USD a day (was 3, which ran out after 18-20 hours and
+# left the last hours of the day without the AI). The monthly ceiling stays at 60 USD by the
+# owner's choice: once it is reached the AI stops for the rest of the month.
+llm:
+  daily_budget_usd: 5.0
+  monthly_budget_usd: 60.0
+
 # D-085 research lab: the research agent proposes rules and writes lessons each night.
 # Its spending has its own daily budget and never counts against the trading agents.
 lab:

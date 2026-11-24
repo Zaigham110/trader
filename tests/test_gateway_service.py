@@ -431,3 +431,42 @@ def test_gateway_refuses_the_wrong_kind_of_account():
     n = len(real.requests)
     assert ok.step() is None and "account changed" in ok.counters.last_error
     assert len(real.requests) == n
+
+
+def test_owner_is_told_once_when_the_broker_link_is_down_and_when_it_returns():
+    svc, client, clock, repo = _service()
+    try:
+        for _ in range(5):
+            _tick(client, clock, 4000.0, 4000.2)
+            svc.step()
+        assert svc.journal.alerts("broker_link_lost") == []
+        client.connected = False
+        svc.step()
+        clock.advance(60)  # a short blip is not reported
+        svc.step()
+        assert svc.journal.alerts("broker_link_lost") == []
+        clock.advance(61)
+        for _ in range(3):  # reported once, however long it lasts
+            svc.step()
+            clock.advance(30)
+        (lost,) = svc.journal.alerts("broker_link_lost")
+        assert lost["severity"] == "critical" and "No position is open" in lost["message"]
+        assert svc.journal.alerts("broker_link_restored") == []
+        client.connected = True
+        _tick(client, clock, 4000.0, 4000.2)
+        svc.step()
+        (back,) = svc.journal.alerts("broker_link_restored")
+        assert back["severity"] == "info" and "back after" in back["message"]
+        svc.step()
+        assert len(svc.journal.alerts("broker_link_restored")) == 1
+        # a blip that ends before two minutes leaves no alert at all
+        client.connected = False
+        svc.step()
+        clock.advance(30)
+        client.connected = True
+        _tick(client, clock, 4000.0, 4000.2)
+        svc.step()
+        assert len(svc.journal.alerts("broker_link_lost")) == 1
+        assert len(svc.journal.alerts("broker_link_restored")) == 1
+    finally:
+        svc.stop()
