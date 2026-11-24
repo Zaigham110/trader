@@ -1848,5 +1848,89 @@ def spec_dump(
             raise typer.Exit(code=3)
 
 
+@app.command("lab-run")
+def lab_run(
+    config: Path = typer.Option(Path("config/demo.yaml")),
+    db: Path = typer.Option(Path("state/demo.sqlite")),
+    history: Path = typer.Option(Path("state/research_history.sqlite")),
+    ledger: Path = typer.Option(
+        Path("state/research.sqlite"), help="Where the lab's own AI spending is recorded"
+    ),
+    provider: str = typer.Option("none", help="anthropic | none (rules made by code only)"),
+    ideas: int = typer.Option(24, min=1, max=200, help="New rules to test in this session"),
+    workers: int = typer.Option(3, min=1, max=8),
+    tier: str = typer.Option("standard", help="Model tier for the research agent"),
+    daily_usd: float = typer.Option(1.0, help="The lab's own daily AI budget, in USD"),
+) -> None:
+    """One session of the research lab (D-085): propose trading rules, run them through the five
+    gates on stored history, and write every outcome to the notebook. Reads prices only; a rule
+    that passes four gates goes to paper trading, never to the account."""
+    import time as _time
+
+    from goldtrader.research import runner
+
+    try:  # hours of backtests must not slow the gateway down: run below normal priority
+        import ctypes
+
+        k32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+        k32.SetPriorityClass(k32.GetCurrentProcess(), 0x00004000)  # BELOW_NORMAL
+    except Exception:  # noqa: BLE001 - not Windows, or not allowed: run at normal priority
+        pass
+    cfg = _load(config)
+    conn = connect(db)
+    migrate(conn)
+    hist = connect(history)
+    migrate(hist)
+    added = runner.sync_bars(hist, str(db))
+    hist.close()
+    now = lambda: int(_time.time() * 1000)  # noqa: E731
+    propose_fn = None
+    if provider == "anthropic":
+        from goldtrader.bots.lab_agent import make_fn
+        from goldtrader.llm.anthropic_provider import AnthropicProvider
+        from goldtrader.llm.store import LLMStore
+
+        if tier not in cfg.llm.tiers:
+            typer.echo(f"tier: one of {sorted(cfg.llm.tiers)}", err=True)
+            raise typer.Exit(code=2)
+        lconn = connect(ledger)
+        migrate(lconn)
+        propose_fn = make_fn(
+            cfg, AnthropicProvider(cfg.llm), LLMStore(lconn), now, daily_usd=daily_usd, tier=tier
+        )
+    elif provider != "none":
+        typer.echo("provider: anthropic | none", err=True)
+        raise typer.Exit(code=2)
+    typer.echo(f"lab: {added} new bars added to the research history; loading it")
+    lab_ = runner.build_lab(str(history), str(db), str(config))
+    with runner.make_pool(str(history), str(db), str(config), workers) as pool:
+        summary = runner.run_session(
+            conn, lab_, now_ms=now, n_ideas=ideas, propose_fn=propose_fn, pool=pool, log=typer.echo
+        )
+    typer.echo(json.dumps(summary, indent=2, default=str))
+
+
+@app.command("lab-status")
+def lab_status(db: Path = typer.Option(Path("state/demo.sqlite")), top: int = 12) -> None:
+    """The research lab's funnel and the rules that got furthest."""
+    from goldtrader.research import lab, runner
+
+    conn = connect(db)
+    migrate(conn)
+    f = runner.funnel(conn)
+    typer.echo(
+        f"proposed {f['proposed']}, tested {f['tested']}; passed trades {f['passed_trades']}, "
+        f"periods {f['passed_periods']}, robust {f['passed_robust']}, luck {f['passed_luck']}, "
+        f"blind {f['passed_blind']}; awaiting blind data {f['awaiting_blind']}; "
+        f"on paper {f['on_paper']}"
+    )
+    book = sorted(lab.notebook(conn, 500), key=lambda n: (-n["gate"], -n["id"]))
+    for n in book[:top]:
+        r = n["results"] or {}
+        per = " | ".join(f"{p['n']} trades {p['mean_r']:+.2f} R" for p in r.get("periods", []))
+        typer.echo(f"#{n['id']} gate {n['gate']} [{n['status']}] {n['what']}")
+        typer.echo(f"     {per}   {r.get('why') or ''}")
+
+
 if __name__ == "__main__":
     app()

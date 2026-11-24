@@ -692,3 +692,6 @@ header{flex-wrap:nowrap} header .pills{flex:1 1 auto;min-width:0;flex-wrap:nowra
 @media (max-width:1100px){ header{flex-wrap:wrap} header .pills{justify-content:flex-start} }
 @media (min-width:721px) and (max-width:1100px){ header .pills{flex-wrap:wrap} }
 @media (max-width:720px){ header .pills{overflow-x:auto} }
+
+/* ----- research lab page (D-085) ----- */
+.gap-top{margin-top:14px}

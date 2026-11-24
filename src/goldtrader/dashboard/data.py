@@ -1223,3 +1223,72 @@ def commands(conn: sqlite3.Connection, limit: int = 10) -> list[dict[str, Any]]:
             (limit,),
         )
     )
+
+
+# ------------------------------------------------------------------ research lab (D-085)
+LAB_GATES = ("trades", "periods", "robust", "luck", "blind")
+
+
+def lab(conn: sqlite3.Connection, now_ms: int) -> dict[str, Any] | None:
+    """The research lab's notebook for the page: the funnel, the latest sessions, the rules that
+    got furthest, where rules fail and what was learned. None before the lab has ever run."""
+    if not table_exists(conn, "research_ideas"):
+        return None
+    funnel = {"proposed": 0, "tested": 0, "awaiting_blind": 0, "on_paper": 0}
+    funnel.update(dict.fromkeys(LAB_GATES, 0))
+    fails: dict[str, int] = {}
+    by_source: dict[str, dict[str, int]] = {}
+    for status, gate, failed_at, paper, tested, source in conn.execute(
+        "SELECT status, gate, failed_at, paper_bundle, tested_ms, source FROM research_ideas"
+    ):
+        funnel["proposed"] += 1
+        funnel["tested"] += tested is not None
+        for i, g in enumerate(LAB_GATES, 1):
+            funnel[g] += gate >= i
+        funnel["awaiting_blind"] += status == "awaiting_blind"
+        funnel["on_paper"] += paper is not None
+        if failed_at:
+            fails[failed_at] = fails.get(failed_at, 0) + 1
+        s_ = by_source.setdefault(source, {"n": 0, "past_periods": 0})
+        s_["n"] += 1
+        s_["past_periods"] += gate >= 2
+
+    def idea(r: sqlite3.Row) -> dict[str, Any]:
+        d = dict(r)
+        d["spec"] = _loads(d.pop("spec_json"), {})
+        d["results"] = _loads(d.pop("results_json"), None)
+        return d
+
+    cols = (
+        "id, created_ms, tested_ms, source, spec_json, what, rationale, expectation, status, gate, "
+        "failed_at, results_json, lesson, paper_bundle"
+    )
+    best = [
+        idea(r)
+        for r in conn.execute(
+            f"SELECT {cols} FROM research_ideas WHERE tested_ms IS NOT NULL OR gate >= 2 "  # noqa: S608
+            "ORDER BY gate DESC, id DESC LIMIT 20"
+        )
+    ]
+    lessons = rows(
+        conn.execute(
+            "SELECT id, what, lesson, status, gate, tested_ms FROM research_ideas "
+            "WHERE lesson IS NOT NULL ORDER BY tested_ms DESC LIMIT 20"
+        )
+    )
+    runs = rows(
+        conn.execute(
+            "SELECT id, started_ms, finished_ms, status, proposed, tested, passed_gate2, "
+            "passed_gate4, cost_usd FROM research_runs ORDER BY id DESC LIMIT 10"
+        )
+    )
+    return {
+        "now_ms": now_ms,
+        "funnel": funnel,
+        "fails": sorted(fails.items(), key=lambda kv: -kv[1]),
+        "by_source": by_source,
+        "best": best,
+        "lessons": lessons,
+        "runs": runs,
+        "running": any(r["status"] == "running" for r in runs),
+    }

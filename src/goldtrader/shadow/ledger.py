@@ -41,7 +41,7 @@ import math
 import sqlite3
 from collections import deque
 from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
@@ -53,6 +53,8 @@ from goldtrader.config.schema import Config
 from goldtrader.data.features import add_features
 from goldtrader.data.resample import bars_to_frame
 from goldtrader.types import Bar, SessionState
+
+LAB_KIND = "lab"  # paper_candidates.kind of a research-lab rule (D-085)
 
 if TYPE_CHECKING:  # annotation only: the ledger must not import the gateway package (D-047)
     from goldtrader.gateway.market import LiveFeatures
@@ -112,6 +114,11 @@ class ShadowPosition:
     spread_cost_entry: float
     slip_cost_entry: float
     bars_held: int = 0
+    # exit management of research-lab rules (D-085): kept in memory only, so after a restart
+    # the trail starts again from the stop on record
+    best: float = 0.0
+    atr: float = 0.0
+    managed: str = ""  # "", "trail" or "breakeven"
 
 
 @dataclass
@@ -130,6 +137,7 @@ class _Bundle:
     last_bar_s: int | None = None
     consecutive_losses: int = 0
     cooldown_until_s: int = 0
+    exit: dict[str, Any] = field(default_factory=dict)  # a lab rule's exit block, else empty
 
 
 class ShadowLedger:
@@ -185,8 +193,18 @@ class ShadowLedger:
         """
         if bundle_id in self._bundles:
             return
-        strategy = build_strategy(kind, bundle_id, dict(params))
-        b = _Bundle(experiment_id, bundle_id, kind, dict(params), strategy)
+        exit_block: dict[str, Any] = {}
+        if kind == LAB_KIND:  # a research-lab rule: `params` is the validated rule itself
+            from goldtrader.research import rules
+
+            spec = rules.validate(dict(params), self.cfg.owner.risk.stop_atr_max)
+            if spec["exit"].get("on_opposite"):
+                raise ValueError("paper trading cannot close or reverse on an opposite signal")
+            strategy = rules.Composed(spec)
+            exit_block = dict(spec["exit"])
+        else:
+            strategy = build_strategy(kind, bundle_id, dict(params))
+        b = _Bundle(experiment_id, bundle_id, kind, dict(params), strategy, exit=exit_block)
         row = self.c.execute(
             "SELECT * FROM shadow_trades WHERE bundle_id=? AND status='open' "
             "ORDER BY entry_ms DESC LIMIT 1",
@@ -208,6 +226,9 @@ class ShadowLedger:
                 spread_cost_entry=float(row["spread_cost"]),
                 slip_cost_entry=float(row["slippage_cost"]),
             )
+            b.position.best = b.position.entry_price
+            stop_atr = float(exit_block.get("stop_atr") or 0.0)
+            b.position.atr = b.position.stop_distance / stop_atr if stop_atr > 0 else 0.0
         last = self.c.execute(
             "SELECT MAX(COALESCE(exit_ms, entry_ms)) FROM shadow_trades WHERE bundle_id=?",
             (bundle_id,),
@@ -312,15 +333,18 @@ class ShadowLedger:
             elif pos.side == "long":
                 if b.bid_low <= pos.sl:
                     px = min(pos.sl, b.bid_open) if self.cost.stop_gap_fill else pos.sl
-                    self._close(bd, b, px - slip, "stop", events)
+                    self._close(bd, b, px - slip, pos.managed or "stop", events)
                 elif b.bid_high >= pos.tp:
                     self._close(bd, b, pos.tp, "target", events)
             else:
                 if b.ask_high >= pos.sl:
                     px = max(pos.sl, b.ask_open) if self.cost.stop_gap_fill else pos.sl
-                    self._close(bd, b, px + slip, "stop", events)
+                    self._close(bd, b, px + slip, pos.managed or "stop", events)
                 elif b.ask_low <= pos.tp:
                     self._close(bd, b, pos.tp, "target", events)
+
+            if bd.position is not None and bd.exit:
+                self._manage_exit(bd, pos, b)
 
         # 3. this bar's signal, acted on at the next bar's open
         if bd.position is None:
@@ -335,6 +359,26 @@ class ShadowLedger:
                 events.append(
                     {"bundle_id": bd.bundle_id, "event": "signal", "side": side_i, "bar_s": b.time}
                 )
+
+    def _manage_exit(self, bd: _Bundle, pos: ShadowPosition, b: Bar) -> None:
+        """A lab rule's stop management, the same arithmetic as `backtest.engine`: the bar that
+        just survived can pull the stop along for the next one, and only ever toward profit."""
+        ex, long_ = bd.exit, pos.side == "long"
+        pos.best = max(pos.best, b.bid_high) if long_ else min(pos.best, b.ask_low)
+        gain = pos.best - pos.entry_price if long_ else pos.entry_price - pos.best
+        digits = self.spec.digits
+        trail = ex.get("trail_atr")
+        if (
+            trail
+            and pos.atr > 0
+            and gain >= float(ex.get("trail_after_r", 0.0)) * pos.stop_distance
+        ):
+            new = round(pos.best - trail * pos.atr if long_ else pos.best + trail * pos.atr, digits)
+            if (new > pos.sl) if long_ else (new < pos.sl):
+                pos.sl, pos.managed = new, "trail"
+        be = ex.get("breakeven_at_r")
+        if be and not pos.managed and gain >= float(be) * pos.stop_distance:
+            pos.sl, pos.managed = round(pos.entry_price, digits), "breakeven"
 
     def _entry_block(
         self,
@@ -374,6 +418,8 @@ class ShadowLedger:
         mid = (b.bid_open + b.ask_open) / 2.0
         sl = entry - stop_distance if side == "long" else entry + stop_distance
         tp = entry + bd.target_atr * a if side == "long" else entry - bd.target_atr * a
+        if bd.exit.get("use_target") is False:  # only the stop closes this trade
+            tp = entry + 1e6 if side == "long" else max(entry - 1e6, 0.0)
         signal_s = bd.pending_signal_s if bd.pending_signal_s is not None else b.time - b.seconds
         pos = ShadowPosition(
             shadow_id=f"{bd.bundle_id}:{b.time}",
@@ -389,6 +435,8 @@ class ShadowLedger:
             stop_distance=stop_distance,
             spread_cost_entry=abs(entry - mid) * vol * contract,
             slip_cost_entry=self.cost.slippage_points * spec.point * vol * contract,
+            best=entry,
+            atr=float(a),
         )
         self.c.execute(
             "INSERT OR IGNORE INTO shadow_trades(shadow_id, experiment_id, bundle_id, side, volume, "

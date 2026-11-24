@@ -242,6 +242,8 @@ class BrainService:
         self.scheduler.add(Job("alerts", self._alerts_job, every_seconds=10))
         self.scheduler.add(Job("heartbeat", self._heartbeat_job, every_seconds=10))
         self.scheduler.add(Job("gateway_watch", self._gateway_watch_job, every_seconds=60))
+        if cfg.lab.enabled:
+            self.scheduler.add(Job("lab", self._lab_job, daily_at_utc=cfg.lab.at_utc))
         self.scheduler.add(Job("dashboard_commands", self._dashboard_commands_job, every_seconds=1))
         if self.chat is not None:
             self.scheduler.add(
@@ -473,6 +475,40 @@ class BrainService:
             log.exception("next event lookup failed")
             return None
         return (nxt[0].title, float(nxt[1])) if nxt is not None else None
+
+    def _lab_job(self) -> None:
+        """Start tonight's research-lab session in its own process (D-085). It runs backtests for
+        a long time at low priority and must never hold up this loop."""
+        if self.config_path is None:
+            return
+        db = self.repo.c.execute("PRAGMA database_list").fetchone()[2]
+        if not db:
+            return
+        lab = self.cfg.lab
+        ai = lab.use_ai and self.provider_name == "anthropic"
+        self.spawn(
+            [
+                sys.executable,
+                "-c",
+                "from goldtrader.cli import app; app()",
+                "lab-run",
+                "--config",
+                str(self.config_path),
+                "--db",
+                str(db),
+                "--provider",
+                "anthropic" if ai else "none",
+                "--ideas",
+                str(lab.ideas_per_session),
+                "--workers",
+                str(lab.workers),
+                "--tier",
+                lab.tier,
+                "--daily-usd",
+                str(lab.daily_usd),
+            ]
+        )
+        log.info("research lab session started (agent %s)", "on" if ai else "off")
 
     def _dashboard_commands_job(self, conn=None) -> None:
         """Owner commands confirmed on the dashboard (D-083): pause, resume, kill, close a position,

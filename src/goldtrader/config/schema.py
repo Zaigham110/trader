@@ -129,6 +129,21 @@ class FeedsConfig(Frozen):
     max_item_age_hours: int = 48
 
 
+class LabConfig(Frozen):
+    """The research lab (D-085): a nightly session that tests trading rules on stored history.
+    It reads prices only and can send a rule to paper trading, never to the account."""
+
+    enabled: bool = True
+    # Off: rules are made by code only (free). On: a research agent also proposes rules and
+    # writes lessons, paid from `daily_usd`, a budget of its own that the trading agents never use.
+    use_ai: bool = False
+    daily_usd: float = Field(default=1.0, ge=0.0, le=20.0)
+    tier: str = "standard"
+    ideas_per_session: int = Field(default=24, ge=1, le=200)
+    at_utc: str = "22:10"  # inside the daily market break
+    workers: int = Field(default=3, ge=1, le=8)
+
+
 class ChatConfig(Frozen):
     """Telegram chat assistant (D-039)."""
 
@@ -241,6 +256,7 @@ class Config(Frozen):
     llm: LLMConfig = LLMConfig()
     feeds: FeedsConfig = FeedsConfig()
     chat: ChatConfig = ChatConfig()
+    lab: LabConfig = LabConfig()
     owner: OwnerConfig = OwnerConfig()
 
     @model_validator(mode="after")
