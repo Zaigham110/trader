@@ -103,7 +103,9 @@ function renderHeader(s) {
   $("ask").textContent = gw && gw.ask != null ? "ask " + f3(gw.ask) : "";
   $("spread").textContent = gw && gw.spread_pips != null ? "spread " + Number(gw.spread_pips).toFixed(1) + " pips · ATR " + (gw.atr != null ? f2(gw.atr) : "–") : "";
   const pills = $("pills"); clear(pills);
-  for (const p of s.processes) pills.appendChild(pill(p.process + (p.stale ? " stale " + Math.round(p.age_s) + "s" : " " + p.status), p.stale ? "bad" : (p.status === "ok" ? "ok" : "warn")));
+  const allOk = s.processes.length && s.processes.every(p => !p.stale && p.status === "ok");
+  if (allOk) { const p = pill("All services ok", "ok"); p.title = s.processes.map(x => x.process).join(", ") + ": running"; pills.appendChild(p); }
+  else for (const p of s.processes) pills.appendChild(pill(p.process + (p.stale ? " stale " + Math.round(p.age_s) + "s" : " " + p.status), p.stale ? "bad" : (p.status === "ok" ? "ok" : "warn")));
   if (gw) {
     pills.appendChild(pill("session " + gw.session, gw.session === "OPEN" ? "ok" : "warn"));
     const lossPause = gw.cooldown_until_ms > s.now_ms; const canEnter = gw.entries_allowed && !gw.paused && !gw.kill_switch && !lossPause; pills.appendChild(pill(canEnter ? "entries allowed" : "entries blocked", canEnter ? "ok" : "warn"));
@@ -111,8 +113,8 @@ function renderHeader(s) {
     if (gw.paused) pills.appendChild(pill("paused", "warn"));
     if (lossPause) pills.appendChild(pill("loss pause until " + hm(gw.cooldown_until_ms), "warn"));
   }
-  pills.appendChild(pill(s.incidents.length + " open incident" + (s.incidents.length === 1 ? "" : "s"), s.incidents.length ? "bad" : "ok"));
-  pills.appendChild(pill("AI cost today $" + f2(s.costs.today), ""));
+  if (s.incidents.length) pills.appendChild(pill(s.incidents.length + " open incident" + (s.incidents.length === 1 ? "" : "s"), "bad"));
+  pills.appendChild(pill("AI $" + f2(s.costs.today) + " today", ""));
   const b = $("banner"), msgs = [];
   if (!s.gateway_reachable) msgs.push("Gateway is not reachable. Account and price figures below are the last recorded ones.");
   for (const i of s.incidents) msgs.push("Incident: " + i.kind + " — " + i.summary);

@@ -53,9 +53,10 @@ function bars(rows, note) {
 /* ---------- charts (TradingView Lightweight Charts, stored in this project) ---------- */
 const charts = new Set();
 function chartColors() {
-  return {layout: {background: {type: "solid", color: "transparent"}, textColor: css("--dim"), attributionLogo: false, fontFamily: "ui-monospace, Consolas, monospace", fontSize: 11},
-    grid: {vertLines: {color: css("--line")}, horzLines: {color: css("--line")}},
-    rightPriceScale: {borderColor: css("--line")}, timeScale: {borderColor: css("--line"), timeVisible: true, secondsVisible: false}};
+  return {layout: {background: {type: "solid", color: "transparent"}, textColor: css("--dim"), attributionLogo: false, fontFamily: css("--sans"), fontSize: 11},
+    grid: {vertLines: {color: css("--grid")}, horzLines: {color: css("--grid")}},
+    rightPriceScale: {borderColor: css("--line")}, timeScale: {borderColor: css("--line"), timeVisible: true, secondsVisible: false},
+    crosshair: {mode: 0, vertLine: {color: css("--faint"), labelBackgroundColor: css("--line2"), style: 3}, horzLine: {color: css("--faint"), labelBackgroundColor: css("--line2"), style: 3}}};
 }
 function makeChart(host, extra) {
   if (!window.LightweightCharts) { host.appendChild(el("div", "empty", "The chart library did not load.")); return null; }
@@ -139,7 +140,7 @@ function drawTrades() {
     if (ch) {
       const seen = new Set(), pts = [], dd = [];
       for (const [ms, cum, down] of s.curve) { let t = Math.floor(ms / 1000) + TZ_S; while (seen.has(t)) t++; seen.add(t); pts.push({time: t, value: cum}); dd.push({time: t, value: down}); }
-      const area = ch.addSeries(LightweightCharts.AreaSeries, {lineColor: css("--gold"), topColor: "rgba(232,184,74,.30)", bottomColor: "rgba(232,184,74,0)", lineWidth: 2, priceFormat: {type: "price", precision: 2, minMove: 0.01}});
+      const area = ch.addSeries(LightweightCharts.AreaSeries, {lineColor: css("--gold"), topColor: "rgba(242,193,78,.32)", bottomColor: "rgba(242,193,78,0)", lineWidth: 2, priceFormat: {type: "price", precision: 2, minMove: 0.01}});
       area.setData(pts);
       const h = ch.addSeries(LightweightCharts.HistogramSeries, {color: "rgba(246,70,93,.45)", priceScaleId: "dd", priceFormat: {type: "price", precision: 2, minMove: 0.01}, lastValueVisible: false, priceLineVisible: false});
       h.setData(dd); ch.priceScale("dd").applyOptions({scaleMargins: {top: 0.75, bottom: 0}, visible: false});
@@ -522,20 +523,25 @@ drawChart = function () {   // replaces the hand-drawn canvas chart of legacy.js
   marks.sort((a, b) => a.time - b.time); LV.marks.setMarkers(marks);
 };
 const DECISION = {sent: "It opened a trade", wait: "It is waiting: the rule gave no signal, or the AI said wait", gated: "A signal was stopped by a code check", blocked: "Entries are blocked right now", flat: "The AI was unavailable, so nothing was proposed", gateway_unavailable: "The gateway could not be reached", error: "The decision cycle failed", running: "A decision is being made"};
+const DECISION_SHORT = {sent: "Entered", wait: "Waiting", gated: "Stopped by a check", blocked: "Entries blocked", flat: "AI unavailable", gateway_unavailable: "Gateway down", error: "Cycle failed", running: "Thinking…"};
+function stat(box, k, v, cls, sub, tip) {
+  const c = el("div", "stat"); c.appendChild(el("div", "k", k)); const vv = el("div", "v " + (cls || ""), v); vv.title = v; c.appendChild(vv);
+  const ss = el("div", "s", sub || ""); ss.title = tip || sub || ""; c.appendChild(ss); box.appendChild(c);
+}
 function drawOverview() {
   const root = $("overviewNew"); if (!root || !snap) return;
-  let k = $("ovCards"); if (!k) { k = el("div", "tm-cards"); k.id = "ovCards"; root.appendChild(k); }
+  let k = $("ovCards"); if (!k) { k = el("div", "statbar"); k.id = "ovCards"; root.appendChild(k); }
   clear(k);
-  const g = snap.gateway, p = snap.positions[0], c = snap.cycles[0], ev = snap.calendar.find(e => e.impact === "high") || snap.calendar[0];
-  tmCard(k, "Equity", g && g.equity != null ? f2(g.equity) + " USD" : "–", "", g ? "balance " + f2(g.balance) : "gateway not reachable");
-  tmCard(k, "Day P&L", g ? signed(g.day_pnl) + " USD" : "–", g ? tone(g.day_pnl) : "", "since 00:00 UTC, open trades included");
-  tmCard(k, "Closed today", snap.trades.today.n + (snap.trades.today.n === 1 ? " trade" : " trades"), tone(snap.trades.today.net_pnl), signed(snap.trades.today.net_pnl) + " USD after costs");
+  const g = snap.gateway, p = snap.positions[0], c = snap.cycles[0], ev = snap.calendar.find(e => e.impact === "high") || snap.calendar[0], all = snap.trades.all, today = snap.trades.today;
+  stat(k, "Equity", g && g.equity != null ? f2(g.equity) : "–", "", g ? "balance " + f2(g.balance) + " USD" : "gateway not reachable");
+  stat(k, "Day P&L", g ? signed(g.day_pnl) : "–", g ? tone(g.day_pnl) : "", today.n + (today.n === 1 ? " trade" : " trades") + " closed today, " + signed(today.net_pnl) + " USD");
   if (p) { const long = p.side === "long" || p.side === "buy", px = g ? (long ? g.bid : g.ask) : null;
-    tmCard(k, "Open trade", (long ? "Long " : "Short ") + p.volume + " @ " + f2(p.price_open), tone(p.profit), (p.profit != null ? signed(p.profit) + " USD now" : "") + (px != null && p.sl ? ", stop " + f2(Math.abs(px - p.sl)) + " away" : ""));
-  } else tmCard(k, "Open trade", "None", "", g && g.entries_allowed ? "waiting for a signal" : "new entries are blocked right now");
-  tmCard(k, "Latest decision", c ? hm(c.started_ms) : "–", "", c ? (DECISION[c.status] || c.status) + (c.gate_reason && c.status === "gated" ? " (" + (REFUSED[c.gate_reason] || c.gate_reason) + ")" : "") : "no decision yet");
-  tmCard(k, "Next event", ev ? dateHm(ev.time_ms) : "none stored", "", ev ? ev.title + (ev.impact === "high" ? " (high impact: entries pause around it)" : "") : "");
-  annotate(k);
+    stat(k, "Open position", (long ? "Long " : "Short ") + p.volume + " @ " + f2(p.price_open), tone(p.profit), (p.profit != null ? signed(p.profit) + " USD now" : "") + (px != null && p.sl ? " · stop " + f2(Math.abs(px - p.sl)) + " away" : ""));
+  } else stat(k, "Open position", "Flat", "", g && g.entries_allowed ? "waiting for a signal" : "new entries are blocked");
+  const why = c ? (DECISION[c.status] || c.status) + (c.gate_reason && c.status === "gated" ? " (" + (REFUSED[c.gate_reason] || c.gate_reason) + ")" : "") : "";
+  stat(k, "AI decision", c ? (DECISION_SHORT[c.status] || c.status) : "–", "ai", c ? hm(c.started_ms) + " · " + why : "no decision yet", why);
+  stat(k, "Track record", all.n ? (all.hit_rate != null ? Math.round(all.hit_rate * 100) + "% wins" : all.n + " trades") : "–", all.n ? tone(all.net_pnl) : "", all.n ? all.n + " trades · net " + signed(all.net_pnl) + " USD" : "no closed trades yet");
+  stat(k, "Next event", ev ? dateHm(ev.time_ms) : "none", ev && ev.impact === "high" ? "gold" : "", ev ? ev.title : "", ev ? ev.title + (ev.impact === "high" ? " (high impact: entries pause around it)" : "") : "");
 }
 const _legacyRender = render;
 render = function () { _legacyRender(); if (GT.page === "overview") { drawOverview(); drawControls(); } };
@@ -625,8 +631,8 @@ function alertSheet(title, text) {
 function drawControls(list) {
   if (!CT.on || !snap) return;
   if (list) CT.recent = list;
-  const root = $("overviewNew"); let c = $("ctlCard");
-  if (!c) { const sec = el("section"); c = card("Controls"); c.id = "ctlCard"; c.classList.add("controls"); sec.appendChild(c); root.appendChild(sec); }
+  const root = $("ctlSlot") || $("overviewNew"); let c = $("ctlCard");
+  if (!c) { c = card("Controls"); c.id = "ctlCard"; c.classList.add("controls"); root.appendChild(c); }
   const g = snap.gateway;
   // rebuild only when something the card shows has changed, so a button keeps its focus
   const sig = JSON.stringify([!!g, g && g.paused, g && g.kill_switch, snap.positions.map(p => [p.ticket != null ? p.ticket : p.position_id, p.side]), CT.recent.slice(0, 4).map(r => [r.id, r.status])]);
@@ -671,4 +677,35 @@ $("drawerClose").addEventListener("click", closeDrawer);
 $("scrim").addEventListener("click", () => { if ($("sheet")) closeSheet(); else closeDrawer(); });
 document.addEventListener("keydown", e => { if (e.key !== "Escape") return; if ($("sheet")) closeSheet(); else if (!$("drawer").hidden) closeDrawer(); });
 document.getElementById("themeBtn").addEventListener("click", () => setTimeout(rethemeCharts, 0));
+// the system light/dark setting can change while the page is open; charts read colours only when told
+if (window.matchMedia) matchMedia("(prefers-color-scheme: light)").addEventListener("change", () => { rethemeCharts(); redrawDiagrams(); });
+document.getElementById("themeBtn").addEventListener("click", () => setTimeout(redrawDiagrams, 0));
+/* ---------- Overview tabs: AI feed, closed trades, events, news ---------- */
+for (const b of document.querySelectorAll(".tabs [data-tab]")) b.addEventListener("click", () => {
+  for (const x of document.querySelectorAll(".tabs [data-tab]")) { x.classList.toggle("on", x === b); x.setAttribute("aria-selected", x === b ? "true" : "false"); }
+  for (const pnl of document.querySelectorAll(".tab-body [data-panel]")) pnl.hidden = pnl.dataset.panel !== b.dataset.tab;
+  $("tradeSum").hidden = b.dataset.tab !== "trades";
+});
+$("tradeSum").hidden = true;
+
+/* ---------- explanations: off by default; every card with a note gets an (i) that shows it ---------- */
+function setExplain(on) {
+  document.body.classList.toggle("explain", on);
+  const b = $("explainBtn"); b.classList.toggle("on", on); b.setAttribute("aria-pressed", on ? "true" : "false");
+  try { localStorage.setItem("gt-explain", on ? "1" : "0"); } catch (e) { /* private mode */ }
+}
+function infoIcons() {
+  for (const n of document.querySelectorAll(".tm-note")) {
+    const host = n.closest(".card, section"); if (!host) continue;
+    const h = host.querySelector("h2"); if (!h) continue;
+    let i = h.querySelector(".info");
+    if (!i) { i = el("span", "info", "i"); i.tabIndex = 0; i.dataset.term = "About this"; i.setAttribute("aria-label", "About this panel"); h.appendChild(i); }
+    if (i.dataset.tip !== n.textContent) i.dataset.tip = n.textContent;
+  }
+}
+let infoQueued = false;
+new MutationObserver(() => { if (!infoQueued) { infoQueued = true; requestAnimationFrame(() => { infoQueued = false; infoIcons(); }); } })
+  .observe(document.body, {childList: true, subtree: true});
+$("explainBtn").addEventListener("click", () => setExplain(!document.body.classList.contains("explain")));
+try { setExplain(localStorage.getItem("gt-explain") === "1"); } catch (e) { setExplain(false); }
 gtBoot();

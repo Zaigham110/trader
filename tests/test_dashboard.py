@@ -160,6 +160,7 @@ def test_server_serves_page_and_api_and_is_read_only(tmp_path):
             ("/app.css", "text/css"),
             ("/app.js", "javascript"),
             ("/legacy.js", "javascript"),
+            ("/tools.js", "javascript"),
         ):
             code, h, raw = _get(srv.port, asset)
             assert code == 200 and ctype in h["Content-Type"] and len(raw) > 500

@@ -38,6 +38,7 @@ ASSETS: dict[str, tuple[str, str]] = {
     "/app.js": ("app.js", "text/javascript; charset=utf-8"),
     "/legacy.js": ("legacy.js", "text/javascript; charset=utf-8"),
     "/pages.js": ("pages.js", "text/javascript; charset=utf-8"),
+    "/tools.js": ("tools.js", "text/javascript; charset=utf-8"),
     "/vendor/lightweight-charts.js": (
         "vendor/lightweight-charts.standalone.production.js",
         "text/javascript; charset=utf-8",
@@ -112,6 +113,15 @@ def _host_ok(header: str | None) -> bool:
     else:
         host = host.rsplit(":", 1)[0] if ":" in host else host
     return host in LOOPBACK
+
+
+class _Server(ThreadingHTTPServer):
+    """The standard listen backlog is 5. A page load asks for about ten files and the polling
+    calls at once, so on Windows the sixth connection was refused and a script could fail to
+    load at random. 64 queued connections is plenty for one owner's browser tabs."""
+
+    request_queue_size = 64
+    daemon_threads = True
 
 
 class DashboardServer:
@@ -296,7 +306,7 @@ class DashboardServer:
 
             do_PUT = do_DELETE = do_PATCH = _refuse_write  # noqa: N815
 
-        self._server = ThreadingHTTPServer((host, port), Handler)
+        self._server = _Server((host, port), Handler)
         self._thread: threading.Thread | None = None
 
     # ------------------------------------------------------------------ data
