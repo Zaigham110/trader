@@ -1210,3 +1210,16 @@ def health_page(conn: sqlite3.Connection, now_ms: int) -> dict[str, Any]:
         ),
         "ai_cost": list(days.values()),
     }
+
+
+def commands(conn: sqlite3.Connection, limit: int = 10) -> list[dict[str, Any]]:
+    """The latest owner commands sent from this page and what became of them."""
+    if not table_exists(conn, "dashboard_commands"):
+        return []
+    return rows(
+        conn.execute(
+            "SELECT id, created_ms, kind, position_id, status, detail, handled_ms "
+            "FROM dashboard_commands ORDER BY id DESC LIMIT ?",
+            (limit,),
+        )
+    )

@@ -504,10 +504,8 @@ def test_trades_page_statistics_and_trade_detail(tmp_path):
             "trend_atr" in info["docs"] and info["configured"] == [] and info["instance"] == "demo"
         )
         assert info["results"]["unknown"]["n"] == 2 and "trailing" in info["common"]
-        assert json.loads(_get(srv.port, "/api/meta")[2]) == {
-            "instance": "demo",
-            "symbol": "XAUUSDm",
-        }
+        meta = json.loads(_get(srv.port, "/api/meta")[2])
+        assert meta == {"instance": "demo", "symbol": "XAUUSDm", "commands": False}
     finally:
         srv.stop()
 
@@ -594,3 +592,96 @@ def test_glossary_route_and_plain_data(tmp_path):
         assert "R" in g["terms"] and "Trailing stop" in g["terms"] and len(g["walkthrough"]) == 7
     finally:
         srv.stop()
+
+
+def _cmd(port: int, path: str, body: dict, headers: dict | None = None):
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{port}{path}",
+        data=json.dumps(body).encode(),
+        method="POST",
+        headers={"Content-Type": "application/json", "X-Dashboard": "1", **(headers or {})},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=5) as r:  # noqa: S310
+            return r.status, json.loads(r.read())
+    except urllib.error.HTTPError as e:
+        return e.code, json.loads(e.read())
+
+
+def test_owner_commands_need_a_fresh_token_and_only_queue_a_row(tmp_path):
+    path = _db(tmp_path)
+    c = connect(path)
+    c.execute(
+        "INSERT INTO positions(position_id, symbol, side, volume, price_open, sl, tp, opened_ms, "
+        "status) VALUES (77, 'XAUUSDm', 'long', 0.01, 4000.2, 3990.0, 4030.0, ?, 'open')",
+        (NOW,),
+    )
+    c.commit()
+    c.close()
+    clock = {"ms": NOW}
+    off = DashboardServer(path, Gateway(), port=0, clock_ms=lambda: clock["ms"])
+    off.start()
+    try:  # off unless the CLI turns them on
+        assert _cmd(off.port, "/api/command", {"step": "prepare", "kind": "pause"})[0] == 503
+    finally:
+        off.stop()
+    srv = DashboardServer(path, Gateway(), port=0, clock_ms=lambda: clock["ms"], commands=True)
+    srv.start()
+    try:
+        p, pause = srv.port, {"step": "prepare", "kind": "pause"}
+        # the same request checks as the chat: custom header, own origin
+        assert _cmd(p, "/api/command", pause, {"X-Dashboard": "0"})[0] == 403
+        assert _cmd(p, "/api/command", pause, {"Origin": "http://evil.example"})[0] == 403
+        # nothing that opens a trade or changes a limit can even be asked for
+        for bad in ("enter", "buy", "set_limit", "", None):
+            got = _cmd(p, "/api/command", {"step": "prepare", "kind": bad})
+            assert got == (400, {"error": "bad_command"})
+        assert _cmd(p, "/api/command", {"step": "prepare", "kind": "close"})[0] == 400
+        missing = {"step": "prepare", "kind": "close", "position_id": 5}
+        assert _cmd(p, "/api/command", missing)[0] == 404
+        bad_token = _cmd(p, "/api/command", {"step": "confirm", "token": "nope"})
+        assert bad_token == (403, {"error": "bad_token"})
+
+        close = {"step": "prepare", "kind": "close", "position_id": 77}
+        code, prep = _cmd(p, "/api/command", close)
+        assert code == 200 and prep["position"]["price_open"] == 4000.2
+        assert prep["instance"] == "demo"
+        confirm = {"step": "confirm", "token": prep["token"]}
+        code, done = _cmd(p, "/api/command", confirm)
+        assert code == 200 and done["id"] == 1
+        assert _cmd(p, "/api/command", confirm)[0] == 403  # a token works once
+
+        _, kill = _cmd(p, "/api/command", {"step": "prepare", "kind": "kill"})
+        untyped = _cmd(p, "/api/command", {"step": "confirm", "token": kill["token"]})
+        assert untyped == (400, {"error": "type_KILL"})
+        _, kill = _cmd(p, "/api/command", {"step": "prepare", "kind": "kill"})
+        typed = {"step": "confirm", "token": kill["token"], "typed": "KILL"}
+        assert _cmd(p, "/api/command", typed)[0] == 200
+
+        _, late = _cmd(p, "/api/command", pause)
+        clock["ms"] += 31_000
+        expired = _cmd(p, "/api/command", {"step": "confirm", "token": late["token"]})
+        assert expired[0] == 403
+        _, third = _cmd(p, "/api/command", pause)
+        full = _cmd(p, "/api/command", {"step": "confirm", "token": third["token"]})
+        assert full[0] == 429  # two are already waiting for the brain
+        rows_ = json.loads(_get(p, "/api/commands")[2])
+        assert [(r["kind"], r["position_id"], r["status"]) for r in rows_] == [
+            ("kill", None, "queued"),
+            ("close", 77, "queued"),
+        ]
+        assert json.loads(_get(p, "/api/meta")[2])["commands"] is True
+    finally:
+        srv.stop()
+    # the connection used for the write can insert that one row and nothing else
+    conn = connect_inbox(path, "dashboard_commands")
+    conn.execute("INSERT INTO dashboard_commands(created_ms, kind) VALUES (1, 'pause')")
+    for sql in (
+        "UPDATE dashboard_commands SET status='done'",
+        "DELETE FROM dashboard_commands",
+        "INSERT INTO dashboard_chat_inbox(created_ms, text) VALUES (1, 'x')",
+        "UPDATE positions SET sl=0",
+        "SELECT * FROM trades",
+    ):
+        with pytest.raises(sqlite3.DatabaseError):
+            conn.execute(sql)

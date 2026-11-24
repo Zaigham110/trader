@@ -62,6 +62,10 @@ def connect_readonly(db_path: Path | str) -> sqlite3.Connection:
 
 
 INBOX = "dashboard_chat_inbox"
+COMMANDS_TABLE = "dashboard_commands"
+# Owner commands the page may queue (D-083). None opens a trade or changes a limit.
+COMMAND_KINDS = ("pause", "resume", "kill", "close", "breakeven")
+COMMAND_TOKEN_MS = 30_000
 # Time machine parameters the page may ask for (the same lists as backtest/timemachine.py,
 # repeated here because this process must not import the backtest or risk code).
 TM_DAYS = (7, 14, 30, 60, 0)
@@ -72,14 +76,14 @@ MAX_QUESTION_CHARS = 2000
 MAX_WAITING = 3
 
 
-def connect_inbox(db_path: Path | str) -> sqlite3.Connection:
-    """A connection that can INSERT into the chat inbox and read it back; nothing else."""
+def connect_inbox(db_path: Path | str, table: str = INBOX) -> sqlite3.Connection:
+    """A connection that can INSERT into one inbox table and read it back; nothing else."""
     conn = sqlite3.connect(str(Path(db_path).resolve()), timeout=5, isolation_level=None)
 
     def authorizer(action: int, a1: Any, a2: Any, _db: Any, _src: Any) -> int:
         if action in (sqlite3.SQLITE_TRANSACTION, sqlite3.SQLITE_SELECT):
             return sqlite3.SQLITE_OK
-        if action in (sqlite3.SQLITE_INSERT, sqlite3.SQLITE_READ) and a1 == INBOX:
+        if action in (sqlite3.SQLITE_INSERT, sqlite3.SQLITE_READ) and a1 == table:
             return sqlite3.SQLITE_OK
         if action == sqlite3.SQLITE_UPDATE and a1 == "sqlite_sequence":  # AUTOINCREMENT counter
             return sqlite3.SQLITE_OK
@@ -126,6 +130,7 @@ class DashboardServer:
         strategy_configs: list[dict[str, Any]] | None = None,
         risk: dict[str, Any] | None = None,
         instance: str = "demo",
+        commands: bool = False,
     ) -> None:
         if host not in LOOPBACK:
             raise ValueError("dashboard binds to loopback only")
@@ -139,6 +144,10 @@ class DashboardServer:
         self.strategy_configs = list(strategy_configs or [])
         self.risk = dict(risk or {})
         self.instance = instance
+        # owner commands (D-083) are off unless the CLI turns them on; one-time confirm tokens
+        self.commands_enabled = commands
+        self._cmd_tokens: dict[str, tuple[str, int | None, int]] = {}
+        self._cmd_lock = threading.Lock()
         self._spawn = spawn or _spawn_detached
         self._tm_proc: Any = None
         self._tm_lock = threading.Lock()
@@ -194,7 +203,16 @@ class DashboardServer:
                             200, {"terms": glossary.TERMS, "walkthrough": glossary.WALKTHROUGH}
                         )
                     if url.path == "/api/meta":
-                        return self._json(200, {"instance": srv.instance, "symbol": srv.symbol})
+                        return self._json(
+                            200,
+                            {
+                                "instance": srv.instance,
+                                "symbol": srv.symbol,
+                                "commands": srv.commands_enabled,
+                            },
+                        )
+                    if url.path == "/api/commands":
+                        return self._json(200, srv.read_plain(data.commands))
                     if url.path == "/api/strategies":
                         return self._json(200, srv.strategies_info())
                     if url.path == "/api/risk":
@@ -244,7 +262,7 @@ class DashboardServer:
             def do_POST(self):
                 raw = self._drain()
                 path = urlsplit(self.path).path
-                if path not in ("/api/chat", "/api/timemachine"):
+                if path not in ("/api/chat", "/api/timemachine", "/api/command"):
                     return self._refuse()
                 # Host + Origin + a header a plain HTML form cannot set: no other site can post here
                 if not _host_ok(self.headers.get("Host")) or not _origin_ok(
@@ -259,6 +277,9 @@ class DashboardServer:
                     body = json.loads(raw.decode("utf-8"))
                     if not isinstance(body, dict):
                         raise TypeError
+                    if path == "/api/command":
+                        code, out = srv.command(body)
+                        return self._json(code, out)
                     if path == "/api/timemachine":
                         code, out = srv.timemachine_start(body)
                         return self._json(code, out)
@@ -293,6 +314,91 @@ class DashboardServer:
             return fn(conn, self.clock_ms(), *args)
         finally:
             conn.close()
+
+    def read_plain(self, fn: Callable[..., Any], *args: Any) -> Any:
+        """The same for a reader that takes only (conn, ...)."""
+        conn = connect_readonly(self.db_path)
+        try:
+            return fn(conn, *args)
+        finally:
+            conn.close()
+
+    # ------------------------------------------------------------------ owner commands (D-083)
+    def command(self, body: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+        """Two steps. `prepare` checks the request and returns a one-time token that lives 30
+        seconds; `confirm` with that token queues the command for the brain. Killing also needs
+        the word KILL. Nothing here reaches the gateway: the only write is one row in
+        `dashboard_commands`, through a connection that can do nothing else."""
+        if not self.commands_enabled:
+            return 503, {"error": "commands_off"}
+        now = self.clock_ms()
+        step = body.get("step")
+        if step == "prepare":
+            kind, pid = body.get("kind"), body.get("position_id")
+            if kind not in COMMAND_KINDS:
+                return 400, {"error": "bad_command"}
+            pos = None
+            if kind in ("close", "breakeven"):
+                if isinstance(pid, bool) or not isinstance(pid, int):
+                    return 400, {"error": "bad_position"}
+                ro = connect_readonly(self.db_path)
+                try:
+                    row = ro.execute(
+                        "SELECT position_id, side, volume, price_open, sl, tp FROM positions "
+                        "WHERE position_id=? AND status='open'",
+                        (pid,),
+                    ).fetchone()
+                finally:
+                    ro.close()
+                if row is None:
+                    return 404, {"error": "position_not_open"}
+                pos = dict(row)
+            else:
+                pid = None
+            token = __import__("secrets").token_hex(16)
+            with self._cmd_lock:
+                self._cmd_tokens = {
+                    t: v for t, v in self._cmd_tokens.items() if v[2] > now
+                }  # drop expired
+                self._cmd_tokens[token] = (kind, pid, now + COMMAND_TOKEN_MS)
+            return 200, {
+                "token": token,
+                "kind": kind,
+                "position": pos,
+                "expires_ms": now + COMMAND_TOKEN_MS,
+                "instance": self.instance,
+            }
+        if step == "confirm":
+            token = body.get("token")
+            with self._cmd_lock:
+                entry = self._cmd_tokens.pop(token, None) if isinstance(token, str) else None
+            if entry is None:
+                return 403, {"error": "bad_token"}
+            kind, pid, expires = entry
+            if expires <= now:
+                return 403, {"error": "token_expired"}
+            if kind == "kill" and body.get("typed") != "KILL":
+                return 400, {"error": "type_KILL"}
+            ro = connect_readonly(self.db_path)
+            try:
+                waiting = ro.execute(
+                    f"SELECT COUNT(*) FROM {COMMANDS_TABLE} WHERE status IN ('queued','working')"  # noqa: S608
+                ).fetchone()[0]
+            finally:
+                ro.close()
+            if waiting >= 2:
+                return 429, {"error": "too_many_waiting"}
+            conn = connect_inbox(self.db_path, COMMANDS_TABLE)
+            try:
+                cur = conn.execute(
+                    f"INSERT INTO {COMMANDS_TABLE}(created_ms, kind, position_id) "  # noqa: S608
+                    "VALUES (?, ?, ?)",
+                    (now, kind, pid),
+                )
+                return 200, {"id": cur.lastrowid}
+            finally:
+                conn.close()
+        return 400, {"error": "bad_step"}
 
     def read_symbol(self, fn: Callable[..., Any], *args: Any) -> Any:
         """The same for a reader that takes (conn, symbol, ...)."""

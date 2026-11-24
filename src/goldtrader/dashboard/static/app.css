@@ -326,3 +326,22 @@ tr.more[hidden]{display:none}
 .gl{border:1px solid var(--line);border-radius:10px;padding:9px 11px;background:var(--panel)}
 .gl b{display:block;color:var(--gold);margin-bottom:2px}
 .gl span{font-size:13px}
+
+/* ----- owner controls ----- */
+.ctl-row{display:flex;flex-wrap:wrap;gap:8px;margin:6px 0 4px}
+.ctl-row .btn{padding:8px 14px;font-size:13px}
+.btn.go{border-color:var(--up);color:var(--up)}
+.btn.danger{border-color:var(--down);color:var(--down)}
+.btn.danger:hover:not(:disabled){background:var(--down);color:#fff}
+.ctl-log{margin-top:8px;display:flex;flex-direction:column;gap:2px;font-family:var(--mono)}
+.sheet{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:30;width:min(520px,calc(100vw - 24px));
+  background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:20px;box-shadow:0 24px 60px rgba(0,0,0,.5);animation:fade .15s ease-out}
+.sheet.live{border:2px solid var(--down)}
+.sheet-live{background:var(--down);color:#fff;font-weight:700;letter-spacing:.06em;font-size:12px;padding:6px 10px;border-radius:8px;margin-bottom:12px;text-align:center}
+.sheet h1{font-size:19px;margin:0 0 8px}
+.sheet .sel.wide{width:100%}
+.sheet-btns{display:flex;gap:10px;justify-content:flex-end;margin-top:16px}
+.sheet-btns .btn{padding:8px 16px;font-size:13.5px}
+.small.up{color:var(--up)} .small.down{color:var(--down)}
+body[data-instance=live] .controls{border-color:var(--down)}
+@media (max-width:720px){.ctl-row .btn{flex:1 1 46%;padding:12px 10px} .sheet-btns .btn{flex:1;padding:12px}}

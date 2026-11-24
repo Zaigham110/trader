@@ -91,7 +91,9 @@ class Intent(Strict):
     position_id: int | None = None
     new_stop_price: float | None = Field(default=None, gt=0)
     reason: str = Field(default="", max_length=300)
-    source: Literal["strategy_bot", "owner_confirmed", "system"] = "strategy_bot"
+    # owner_dashboard (D-083): confirmed on the local dashboard. It may pause, resume from a
+    # pause, kill, close and move a stop; only owner_confirmed (Telegram) resets a kill switch.
+    source: Literal["strategy_bot", "owner_confirmed", "owner_dashboard", "system"] = "strategy_bot"
 
 
 class IntentResult(Strict):

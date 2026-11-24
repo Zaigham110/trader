@@ -24,7 +24,7 @@ from goldtrader.risk.types import AccountState, EntryRequest, MarketState, RiskC
 StateProvider = Callable[[], tuple[AccountState, MarketState, RiskContext]]
 
 OWNER_ONLY_KINDS = frozenset({"kill", "resume"})
-OWNER_SOURCES = frozenset({"owner_confirmed", "system"})
+OWNER_SOURCES = frozenset({"owner_confirmed", "owner_dashboard", "system"})
 
 
 class IntentHandler:

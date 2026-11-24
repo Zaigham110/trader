@@ -538,7 +538,7 @@ function drawOverview() {
   annotate(k);
 }
 const _legacyRender = render;
-render = function () { _legacyRender(); if (GT.page === "overview") drawOverview(); };
+render = function () { _legacyRender(); if (GT.page === "overview") { drawOverview(); drawControls(); } };
 
 /* ====================================================================== Help page and tooltips */
 const HP = {data: null, q: ""};
@@ -569,6 +569,82 @@ function drawHelp() {
 }
 get("/api/glossary").then(g => { HP.data = g; GT.glossary = g.terms; annotate(document); if (GT.page === "help") drawHelp(); }).catch(() => {});
 
+/* ====================================================================== Owner controls (D-083) */
+const CT = {on: false, instance: "demo", timer: null, recent: []};
+const CMD_NAME = {pause: "Pause entries", resume: "Resume entries", kill: "Kill switch", close: "Close position", breakeven: "Stop to entry"};
+const CMD_RESULT = {done: "Done", refused: "Refused", failed: "Failed", expired: "Not carried out: it waited too long", queued: "Waiting for the system", working: "Being carried out"};
+async function postCmd(body) {
+  const r = await fetch("/api/command", {method: "POST", headers: {"Content-Type": "application/json", "X-Dashboard": "1"}, body: JSON.stringify(body)});
+  let out = {}; try { out = await r.json(); } catch (e) { /* no body */ }
+  return [r.status, out];
+}
+function cmdText(kind, pos) {
+  const g = snap && snap.gateway, long = pos && pos.side === "long", px = g && pos ? (long ? g.bid : g.ask) : null;
+  if (kind === "pause") return "New entries will be blocked. An open trade keeps its stop and its target. You can resume from this page.";
+  if (kind === "resume") return "New entries will be allowed again.";
+  if (kind === "kill") return "Every open position is closed at the market price now, pending orders are cancelled and trading stops. It can be switched back on only from Telegram.";
+  if (kind === "close") return "Close the " + pos.side + " of " + pos.volume + " lot opened at " + f2(pos.price_open) + " at the market price" + (px != null ? ", now about " + f2(px) + ": about " + signed((long ? px - pos.price_open : pos.price_open - px) * pos.volume * 100) + " USD before costs." : ".");
+  return "Move the stop of the " + pos.side + " from " + f2(pos.sl) + " to its entry price " + f2(pos.price_open) + ". This is refused unless the price is on the winning side of the entry, because a stop may only move toward profit.";
+}
+function closeSheet() { clearInterval(CT.timer); const s = $("sheet"); if (s) s.remove(); $("scrim").hidden = !$("drawer").hidden ? false : true; }
+async function startCmd(kind, positionId) {
+  const [code, prep] = await postCmd({step: "prepare", kind, position_id: positionId == null ? undefined : positionId});
+  if (code !== 200) { alertSheet("That cannot be done right now", code === 404 ? "That position is no longer open." : code === 503 ? "Commands are switched off for this dashboard." : "The dashboard server refused the request (" + code + ")."); return; }
+  closeSheet();
+  const sh = el("div", "sheet" + (prep.instance === "live" ? " live" : "")); sh.id = "sheet"; sh.setAttribute("role", "dialog"); sh.setAttribute("aria-modal", "true");
+  if (prep.instance === "live") sh.appendChild(el("div", "sheet-live", "LIVE ACCOUNT: this acts on real money"));
+  sh.appendChild(el("h1", null, CMD_NAME[kind] + "?"));
+  sh.appendChild(el("p", "lead", cmdText(kind, prep.position)));
+  let typed = null;
+  if (kind === "kill") { typed = el("input", "sel wide"); typed.placeholder = "Type KILL to confirm"; typed.setAttribute("aria-label", "Type KILL to confirm"); typed.autocomplete = "off"; sh.appendChild(typed); }
+  const left = el("div", "dim small"); sh.appendChild(left);
+  const row = el("div", "sheet-btns"), cancel = el("button", "btn", "Cancel"), ok = el("button", "btn danger", "Confirm: " + CMD_NAME[kind].toLowerCase());
+  cancel.type = ok.type = "button"; row.appendChild(cancel); row.appendChild(ok); sh.appendChild(row);
+  document.body.appendChild(sh); $("scrim").hidden = false; (typed || cancel).focus();
+  const tick = () => { const s = Math.max(0, Math.ceil((prep.expires_ms - (snap ? snap.now_ms + (Date.now() - lastOk) : Date.now())) / 1000)); left.textContent = s > 0 ? "This confirmation is valid for " + s + " more seconds." : "This confirmation has expired. Close it and start again."; ok.disabled = s <= 0 || (typed && typed.value !== "KILL"); };
+  tick(); CT.timer = setInterval(tick, 500); if (typed) typed.addEventListener("input", tick);
+  cancel.addEventListener("click", closeSheet);
+  ok.addEventListener("click", async () => {
+    ok.disabled = true; clearInterval(CT.timer);
+    const [c2, done] = await postCmd({step: "confirm", token: prep.token, typed: typed ? typed.value : undefined});
+    if (c2 !== 200) { left.textContent = c2 === 429 ? "Two commands are already waiting. Try again in a moment." : "Not sent: the confirmation was no longer valid. Close this and start again."; return; }
+    row.removeChild(ok); cancel.textContent = "Close"; left.textContent = "Sent. Waiting for the system to carry it out…";
+    let n = 0; CT.timer = setInterval(async () => {
+      n++; let list = []; try { list = await get("/api/commands"); } catch (e) { /* keep waiting */ }
+      const me = list.find(x => x.id === done.id);
+      if (me && me.status !== "queued" && me.status !== "working") { clearInterval(CT.timer); left.className = "small " + (me.status === "done" ? "up" : "down"); left.textContent = CMD_RESULT[me.status] + (me.detail && me.status !== "done" ? ": " + (REFUSED[me.detail] || me.detail.replace(/_/g, " ")) : "") + "."; loadSnap(); drawControls(list); }
+      else if (n > 25) { clearInterval(CT.timer); left.textContent = "No answer yet. The brain may not be running; an unanswered command is dropped after one minute."; }
+    }, 1000);
+  });
+}
+function alertSheet(title, text) {
+  closeSheet(); const sh = el("div", "sheet"); sh.id = "sheet"; sh.appendChild(el("h1", null, title)); sh.appendChild(el("p", "lead", text));
+  const row = el("div", "sheet-btns"), b = el("button", "btn", "Close"); b.type = "button"; b.addEventListener("click", closeSheet); row.appendChild(b); sh.appendChild(row);
+  document.body.appendChild(sh); $("scrim").hidden = false; b.focus();
+}
+function drawControls(list) {
+  if (!CT.on || !snap) return;
+  if (list) CT.recent = list;
+  const root = $("overviewNew"); let c = $("ctlCard");
+  if (!c) { const sec = el("section"); c = card("Controls"); c.id = "ctlCard"; c.classList.add("controls"); sec.appendChild(c); root.appendChild(sec); }
+  const g = snap.gateway;
+  // rebuild only when something the card shows has changed, so a button keeps its focus
+  const sig = JSON.stringify([!!g, g && g.paused, g && g.kill_switch, snap.positions.map(p => [p.ticket != null ? p.ticket : p.position_id, p.side]), CT.recent.slice(0, 4).map(r => [r.id, r.status])]);
+  if (c.dataset.sig === sig) return;
+  c.dataset.sig = sig;
+  while (c.childElementCount > 1) c.removeChild(c.lastChild);
+  if (!g) { c.appendChild(el("div", "empty", "The gateway is not reachable, so commands cannot be carried out right now. The kill switch also works from Telegram.")); return; }
+  c.appendChild(el("div", "tm-note", "Each button asks you to confirm before anything happens. None of them can open a trade or change a limit."));
+  const row = el("div", "ctl-row"), btn = (label, cls, fn) => { const b = el("button", "btn " + cls, label); b.type = "button"; b.addEventListener("click", fn); row.appendChild(b); return b; };
+  if (g.paused) btn("Resume entries", "go", () => startCmd("resume")); else btn("Pause entries", "", () => startCmd("pause"));
+  for (const p of snap.positions) { const id = p.ticket != null ? p.ticket : p.position_id; btn("Close the " + p.side, "", () => startCmd("close", id)); btn("Stop to entry", "", () => startCmd("breakeven", id)); }
+  const k = btn("Kill switch", "danger", () => startCmd("kill")); k.disabled = !!g.kill_switch; if (g.kill_switch) k.textContent = "Kill switch is on";
+  c.appendChild(row);
+  if (CT.recent.length) { const box = el("div", "ctl-log");
+    for (const r of CT.recent.slice(0, 4)) box.appendChild(el("div", "small " + (r.status === "done" ? "dim" : r.status === "queued" || r.status === "working" ? "" : "down"), dateHm(r.created_ms) + "  " + CMD_NAME[r.kind] + ": " + CMD_RESULT[r.status].toLowerCase() + (r.detail && r.status !== "done" ? " (" + (REFUSED[r.detail] || r.detail.replace(/_/g, " ")) + ")" : "")));
+    c.appendChild(box); }
+}
+
 /* ---------- panels that moved to their own page ---------- */
 (function movePanels() {
   const chat = document.querySelector(".card.chat"), a = $("assistantNew");
@@ -578,7 +654,7 @@ get("/api/glossary").then(g => { HP.data = g; GT.glossary = g.terms; annotate(do
 })();
 
 /* ---------- wiring ---------- */
-GT.hooks.overview = () => { drawOverview(); };
+GT.hooks.overview = () => { drawOverview(); drawControls(); };
 GT.hooks.assistant = () => { const m = $("msgs"); if (m) m.scrollTop = m.scrollHeight; };
 GT.hooks.help = () => drawHelp();
 GT.hooks.agents = () => annotate($("page-agents"));
@@ -588,11 +664,11 @@ setInterval(() => { if (GT.page === "risk" && !document.hidden) loadRisk(); }, 1
 GT.hooks.strategies = () => loadStrategies();
 window.addEventListener("resize", redrawDiagrams);
 setInterval(() => { if (GT.page === "strategies" && !document.hidden) loadStrategies(); }, 60000);
-get("/api/meta").then(m => { const b = $("inst"); b.textContent = m.instance === "live" ? "LIVE ACCOUNT" : "DEMO ACCOUNT"; b.className = "inst " + (m.instance === "live" ? "live" : "demo"); document.body.dataset.instance = m.instance; }).catch(() => {});
+get("/api/meta").then(m => { const b = $("inst"); b.textContent = m.instance === "live" ? "LIVE ACCOUNT" : "DEMO ACCOUNT"; b.className = "inst " + (m.instance === "live" ? "live" : "demo"); document.body.dataset.instance = m.instance; CT.on = !!m.commands; CT.instance = m.instance; if (CT.on) get("/api/commands").then(l => drawControls(l)).catch(() => {}); }).catch(() => {});
 GT.hooks.trades = () => loadTrades();
 setInterval(() => { if (GT.page === "trades" && !document.hidden && $("drawer").hidden) loadTrades(); }, 30000);
 $("drawerClose").addEventListener("click", closeDrawer);
-$("scrim").addEventListener("click", closeDrawer);
-document.addEventListener("keydown", e => { if (e.key === "Escape" && !$("drawer").hidden) closeDrawer(); });
+$("scrim").addEventListener("click", () => { if ($("sheet")) closeSheet(); else closeDrawer(); });
+document.addEventListener("keydown", e => { if (e.key !== "Escape") return; if ($("sheet")) closeSheet(); else if (!$("drawer").hidden) closeDrawer(); });
 document.getElementById("themeBtn").addEventListener("click", () => setTimeout(rethemeCharts, 0));
 gtBoot();

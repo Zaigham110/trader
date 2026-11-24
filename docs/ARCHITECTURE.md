@@ -182,6 +182,12 @@ loop can write to the risk section of config.
   that can do nothing else; the brain answers it and refuses every action asked for from there.
   `POST /api/timemachine` starts `goldctl timemachine` as a separate process with whitelisted
   parameters (D-058); that process only reads bars and writes its result row.
+  Since D-083 it serves a fixed list of static files by exact name, allows no inline script, and
+  has one more write: `POST /api/command` queues an owner command (pause, resume, kill, close,
+  stop to entry) in `dashboard_commands` after a two-step confirmation with a one-time token,
+  again through a connection that can do nothing else. The brain turns the row into an intent
+  with source `owner_dashboard`; the gateway's risk engine checks it like any other, and that
+  source cannot reset a kill switch.
 - Telegram: owner chat ID only; every state-changing command confirms with a button; confirmation
   tokens expire after 2 minutes.
 - Untrusted text (news) is wrapped in delimiters and stripped of markup before any prompt (R-024).

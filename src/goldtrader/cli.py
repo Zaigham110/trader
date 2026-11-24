@@ -1253,8 +1253,12 @@ def dashboard(
     gateway_url: str = "http://127.0.0.1:8750",
     port: int = 8760,
     minutes: float | None = None,
+    no_commands: bool = typer.Option(
+        False, "--no-commands", help="View only: hide pause, kill, close and stop-to-entry"
+    ),
 ) -> None:
-    """Serve the read-only dashboard on this PC only (D-056): market, account, agents."""
+    """Serve the dashboard on this PC only (D-056, D-083): market, account, agents, and the
+    owner's confirmed commands (pause, resume, kill, close, stop to entry)."""
     import threading
 
     from goldtrader.dashboard.server import DashboardServer
@@ -1285,10 +1289,11 @@ def dashboard(
             strategy_configs=[st.model_dump(mode="json") for st in cfg.strategies],
             risk=cfg.owner.risk.model_dump(mode="json"),
             instance=cfg.account.environment,
+            commands=not no_commands,
         )
         srv.start()
         typer.echo(
-            f"dashboard up: http://127.0.0.1:{srv.port}  (read-only; "
+            f"dashboard up: http://127.0.0.1:{srv.port}  ("
             f"gateway={'on' if gateway else 'no token, database only'})"
         )
         stop = threading.Event()

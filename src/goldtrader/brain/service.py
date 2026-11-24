@@ -242,6 +242,7 @@ class BrainService:
         self.scheduler.add(Job("alerts", self._alerts_job, every_seconds=10))
         self.scheduler.add(Job("heartbeat", self._heartbeat_job, every_seconds=10))
         self.scheduler.add(Job("gateway_watch", self._gateway_watch_job, every_seconds=60))
+        self.scheduler.add(Job("dashboard_commands", self._dashboard_commands_job, every_seconds=1))
         if self.chat is not None:
             self.scheduler.add(
                 Job("chat", self._chat_job, every_seconds=max(1, cfg.chat.poll_seconds))
@@ -473,6 +474,106 @@ class BrainService:
             return None
         return (nxt[0].title, float(nxt[1])) if nxt is not None else None
 
+    def _dashboard_commands_job(self, conn=None) -> None:
+        """Owner commands confirmed on the dashboard (D-083): pause, resume, kill, close a position,
+        move its stop to the entry price. Each queued row becomes one intent with source
+        `owner_dashboard`; the gateway's risk engine checks it like any other and the outcome is
+        written back to the row and alerted. A command older than a minute is not carried out.
+
+        It runs as a scheduler job and, with its own connection, on a small thread of its own
+        (`_command_thread`): a kill switch must not wait behind a model call in the main loop.
+        Each row is claimed first, so the two never carry out the same command."""
+        from goldtrader.contracts import Intent
+
+        c = conn if conn is not None else self.repo.c
+        rows = c.execute(
+            "SELECT id, created_ms, kind, position_id FROM dashboard_commands "
+            "WHERE status='queued' ORDER BY id LIMIT 5"
+        ).fetchall()
+        for cid, created_ms, kind, position_id in rows:
+            now = int(time.time() * 1000)  # rows are stamped with real time by the dashboard
+            claimed = c.execute(
+                "UPDATE dashboard_commands SET status='working' WHERE id=? AND status='queued'",
+                (cid,),
+            ).rowcount
+            if claimed != 1:
+                continue
+            status, detail = "refused", ""
+            try:
+                if now - int(created_ms) > 60_000:
+                    status, detail = "expired", "older than a minute when the brain saw it"
+                else:
+                    status, detail = self._run_dashboard_command(
+                        c, Intent, cid, kind, position_id, now
+                    )
+            except Exception as e:  # noqa: BLE001 - one bad command must not stop the loop
+                status, detail = "failed", f"{type(e).__name__}: {e}"[:200]
+                log.exception("dashboard command %s failed", cid)
+            c.execute(
+                "UPDATE dashboard_commands SET status=?, detail=?, handled_ms=? WHERE id=?",
+                (status, detail, now, cid),
+            )
+            message = (
+                f"Dashboard command '{kind}'"
+                + (f" for position {position_id}" if position_id else "")
+                + f": {status}"
+                + (f" ({detail})" if detail else "")
+            )
+            c.execute(
+                "INSERT INTO alerts(created_ms, severity, kind, message, details_json) "
+                "VALUES (?,?,?,?,'{}')",
+                (now, "critical" if kind == "kill" else "warning", "owner_command", message),
+            )
+
+    def _command_thread(self, stop: threading.Event) -> None:
+        """Carry out dashboard commands twice a second whatever the main loop is doing."""
+        from goldtrader.db import connect
+
+        try:
+            path = self.repo.c.execute("PRAGMA database_list").fetchone()[2]
+        except Exception:  # noqa: BLE001
+            path = ""
+        if not path:
+            return  # an in-memory database (tests): the scheduler job does the work
+        conn = connect(path)
+        while not stop.wait(0.5):
+            try:
+                self._dashboard_commands_job(conn)
+            except Exception:  # noqa: BLE001 - keep serving commands
+                log.exception("dashboard command thread")
+
+    def _run_dashboard_command(self, c, intent_cls, cid: int, kind: str, position_id, now: int):
+        base = {"intent_id": f"dash:{cid}", "created_ms": now, "source": "owner_dashboard"}
+        if kind in ("pause", "resume", "kill"):
+            if kind == "resume":
+                st = self.gateway.state()
+                if st is not None and st.kill_switch:
+                    return "refused", "the kill switch is on; it can only be reset from Telegram"
+            intent = intent_cls(kind=kind, reason="owner, from the dashboard", **base)
+        elif kind == "close" and position_id is not None:
+            intent = intent_cls(kind="exit", position_id=int(position_id), reason="manual", **base)
+        elif kind == "breakeven" and position_id is not None:
+            row = c.execute(
+                "SELECT price_open FROM positions WHERE position_id=? AND status='open'",
+                (int(position_id),),
+            ).fetchone()
+            if row is None:
+                return "refused", "that position is not open"
+            intent = intent_cls(
+                kind="move_stop",
+                position_id=int(position_id),
+                new_stop_price=float(row[0]),
+                reason="owner: stop to entry",
+                **base,
+            )
+        else:
+            return "refused", "unknown command"
+        res = self.gateway.send_intent(intent)
+        ok = res.status == "executed"
+        return ("done" if ok else "refused" if res.status == "rejected" else "failed"), (
+            res.risk_code or res.detail or ""
+        )[:200]
+
     def _dashboard_chat_job(self) -> None:
         if self.dashboard_chat is not None:
             self.dashboard_chat.poll_once(timeout_s=0)
@@ -516,6 +617,11 @@ class BrainService:
     def run(self, stop: threading.Event, interval_s: float = 1.0, on_tick=None) -> None:
         """`on_tick` is called after every pass of the scheduler, including one that raised: the
         loop is then still turning. Only a call that never returns stops it (the watchdog, D-078)."""
+        worker = getattr(self, "_command_thread", None)
+        if worker is not None:
+            threading.Thread(
+                target=worker, args=(stop,), daemon=True, name="dashboard-commands"
+            ).start()
         while not stop.is_set():
             try:
                 self.tick()

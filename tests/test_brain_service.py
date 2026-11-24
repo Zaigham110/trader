@@ -252,3 +252,76 @@ def test_brain_news_calendar_and_chat_jobs(tmp_path):
         assert any("Consumer" in e.title for e in evs)
     finally:
         gw.stop()
+
+
+def test_dashboard_commands_become_checked_intents(tmp_path):
+    import time
+
+    import pytest
+
+    from goldtrader.contracts import Intent
+
+    cfg, repo, brain_repo, gw, gclient, client, clock = _stack(tmp_path)
+    try:
+        brain = BrainService(
+            cfg, brain_repo, gclient, provider=None, clock_ms=clock, cycle_every_s=3600
+        )
+        atr = gclient.state().atr
+        stop = round(4000.2 - 0.8 * atr, 2)
+        res = gclient.send_intent(
+            Intent(
+                intent_id="e1",
+                kind="enter",
+                created_ms=clock.ms,
+                side="long",
+                stop_price=stop,
+                target_price=round(4000.2 + 1.2 * atr, 2),
+                bundle_id="t",
+                proposal_id="p1",
+            )
+        )
+        assert res.status == "executed", res
+        pid = client.positions_get()[0].ticket
+
+        def run(kind, position_id=None, age_ms=0):
+            cur = brain_repo.c.execute(
+                "INSERT INTO dashboard_commands(created_ms, kind, position_id) VALUES (?,?,?)",
+                (int(time.time() * 1000) - age_ms, kind, position_id),
+            )
+            brain._dashboard_commands_job()
+            gw.step()  # the gateway's published state refreshes on its next step
+            return brain_repo.c.execute(
+                "SELECT status, detail FROM dashboard_commands WHERE id=?", (cur.lastrowid,)
+            ).fetchone()
+
+        assert run("pause")[0] == "done" and gclient.state().paused
+        assert run("resume")[0] == "done" and not gclient.state().paused
+        assert run("pause", age_ms=61_000)[0] == "expired" and not gclient.state().paused
+        assert run("enter")[0] == "refused" and run("close")[0] == "refused"  # unknown / no id
+        # stop to entry while the price is below the entry: the risk engine refuses it
+        status, detail = run("breakeven", pid)
+        assert status == "refused" and "stop" in detail
+        assert client.positions_get()[0].sl == pytest.approx(stop)
+        # ... and allows it once the price is above the entry
+        _tick(client, clock, 4003.0, 4003.2)
+        gw.step()
+        assert run("breakeven", pid)[0] == "done"
+        pos = client.positions_get()[0]
+        assert pos.sl == pytest.approx(pos.price_open)
+        assert run("close", pid)[0] == "done" and client.positions_get() == []
+        assert repo.c.execute("SELECT exit_reason FROM trades").fetchone()[0] == "manual"
+        # kill from the dashboard works; undoing it from the dashboard does not
+        assert run("kill")[0] == "done" and gclient.state().kill_switch
+        status, detail = run("resume")
+        assert status == "refused" and "Telegram" in detail and gclient.state().kill_switch
+        # even a resume intent sent straight to the gateway with this source leaves it on
+        direct = gclient.send_intent(
+            Intent(intent_id="r9", kind="resume", created_ms=clock.ms, source="owner_dashboard")
+        )
+        assert direct.status == "executed" and gclient.state().kill_switch
+        n = brain_repo.c.execute(
+            "SELECT COUNT(*) FROM alerts WHERE kind='owner_command'"
+        ).fetchone()[0]
+        assert n == 10  # every command is alerted, whatever became of it
+    finally:
+        gw.stop()

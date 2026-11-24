@@ -106,7 +106,7 @@ function renderHeader(s) {
   for (const p of s.processes) pills.appendChild(pill(p.process + (p.stale ? " stale " + Math.round(p.age_s) + "s" : " " + p.status), p.stale ? "bad" : (p.status === "ok" ? "ok" : "warn")));
   if (gw) {
     pills.appendChild(pill("session " + gw.session, gw.session === "OPEN" ? "ok" : "warn"));
-    pills.appendChild(pill(gw.entries_allowed ? "entries allowed" : "entries blocked", gw.entries_allowed ? "ok" : "warn"));
+    const canEnter = gw.entries_allowed && !gw.paused && !gw.kill_switch; pills.appendChild(pill(canEnter ? "entries allowed" : "entries blocked", canEnter ? "ok" : "warn"));
     if (gw.kill_switch) pills.appendChild(pill("KILL SWITCH ON", "bad"));
     if (gw.paused) pills.appendChild(pill("paused", "warn"));
   }
@@ -333,7 +333,7 @@ async function get(path) { const r = await fetch(path, {cache: "no-store"}); if 
 async function loadSnap() {
   try { snap = await get("/api/snapshot"); lastOk = Date.now(); render(); }
   catch (e) { const b = $("banner"); b.textContent = "Dashboard server is not answering. Last update " + (lastOk ? hm(lastOk) : "never") + "."; b.classList.add("show"); }
-  $("foot").textContent = "Nothing on this page can trade or change settings; the chat box only asks questions. Updated " + (lastOk ? new Date(lastOk).toLocaleTimeString() : "never") + ".";
+  $("foot").textContent = "This page cannot open a trade or change a limit. Pause, kill switch, close and stop-to-entry each ask you to confirm. Updated " + (lastOk ? new Date(lastOk).toLocaleTimeString() : "never") + ".";
 }
 async function loadBars() { try { const b = await get("/api/bars?minutes=" + minutes + "&limit=240"); candles = b.candles; drawChart(); } catch (e) { /* the banner from loadSnap covers it */ } }
 function buildTf() {
