@@ -17,6 +17,7 @@
       <a href="#agents" data-nav="agents"><span class="nav-ico" aria-hidden="true"></span><span class="nav-txt">AI agents</span></a>
       <a href="#research" data-nav="research"><span class="nav-ico" aria-hidden="true"></span><span class="nav-txt">Research</span></a>
       <a href="#risk" data-nav="risk"><span class="nav-ico" aria-hidden="true"></span><span class="nav-txt">Risk &amp; health</span></a>
+      <a href="#assistant" data-nav="assistant"><span class="nav-ico" aria-hidden="true"></span><span class="nav-txt">Assistant</span></a>
       <a href="#help" data-nav="help"><span class="nav-ico" aria-hidden="true"></span><span class="nav-txt">Help</span></a>
     </div>
     <div class="rail-foot">
@@ -42,7 +43,8 @@
         <h2>Market</h2><span class="ohlc num dim" id="ohlc"></span>
         <div class="tf" id="tf" role="group" aria-label="Timeframe"></div>
       </div>
-      <canvas id="chart" aria-label="Gold price candlestick chart"></canvas>
+      <div class="chart-box tall" id="liveChart" aria-label="Gold price candlestick chart"></div>
+      <canvas id="chart" hidden></canvas>
     </div>
     <div class="card">
       <h2>Account</h2>
@@ -169,6 +171,10 @@
   <main class="page" id="page-risk" data-page="risk" hidden>
     <div class="page-head"><h1>Risk &amp; health</h1><p>Every safety limit and how much of it is used, and how reliably the system has been running.</p></div>
     <div id="riskNew"></div>
+  </main>
+  <main class="page" id="page-assistant" data-page="assistant" hidden>
+    <div class="page-head"><h1>Assistant</h1><p>Ask about the account, a trade, or why the system is waiting. It answers from the same records these pages show and cannot place or change anything.</p></div>
+    <div id="assistantNew"></div>
   </main>
   <main class="page" id="page-help" data-page="help" hidden>
     <div class="page-head"><h1>Help</h1><p>What the words on these pages mean, and how a trade happens from signal to close.</p></div>

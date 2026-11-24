@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
-from goldtrader import strategy_docs
+from goldtrader import glossary, strategy_docs
 from goldtrader.dashboard import data
 
 LOOPBACK = ("127.0.0.1", "localhost", "::1")
@@ -189,6 +189,10 @@ class DashboardServer:
                                 return self._json(404, {"error": "not_found"})
                             return self._json(200, one)
                         return self._json(200, srv.timemachine_list())
+                    if url.path == "/api/glossary":
+                        return self._json(
+                            200, {"terms": glossary.TERMS, "walkthrough": glossary.WALKTHROUGH}
+                        )
                     if url.path == "/api/meta":
                         return self._json(200, {"instance": srv.instance, "symbol": srv.symbol})
                     if url.path == "/api/strategies":

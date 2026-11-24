@@ -313,3 +313,16 @@ tr.more[hidden]{display:none}
 .check.no .check-mark{color:var(--warn);border-color:var(--warn)}
 .costday{padding:7px 0;border-bottom:1px solid var(--line)}
 .costday:last-child{border-bottom:0}
+
+/* ----- overview, assistant, help ----- */
+#overviewNew .tm-cards{margin-top:0}
+#page-assistant .card.chat{max-width:900px}
+#page-assistant .msgs{height:min(60vh,640px)}
+.sel.wide{width:min(420px,100%);margin-bottom:12px;padding:8px 10px}
+.steps{margin:0;padding-left:22px;display:flex;flex-direction:column;gap:10px;max-width:820px}
+.steps li b{display:block}
+.steps li span{color:var(--dim);font-size:13.5px}
+.gloss{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:10px}
+.gl{border:1px solid var(--line);border-radius:10px;padding:9px 11px;background:var(--panel)}
+.gl b{display:block;color:var(--gold);margin-bottom:2px}
+.gl span{font-size:13px}

@@ -167,7 +167,7 @@ function drawTrades() {
   const sel = $("trExitSel"), keep = TR.filter.exit; clear(sel);
   for (const [v, label] of [["", "Any close"], ...Object.keys(s.by.exit_reason).map(x => [x, exitLabel(x)])]) { const o = el("option", null, label); o.value = v; sel.appendChild(o); }
   sel.value = keep in s.by.exit_reason ? keep : ""; TR.filter.exit = sel.value;
-  drawTradeTable();
+  drawTradeTable(); annotate($("page-trades"));
 }
 function drawTradeTable() {
   const box = $("trTable"), pager = $("trPager"); clear(box); clear(pager);
@@ -405,7 +405,7 @@ function buildStrategies() {
     const sx = el("div", "scroll-x"); sx.appendChild(t); pc.appendChild(sx);
   }
   sec.appendChild(pc); root.appendChild(sec);
-  redrawDiagrams();
+  redrawDiagrams(); annotate(root);
 }
 async function loadStrategies() {
   try { ST.data = await get("/api/strategies"); } catch (e) { return; }
@@ -482,10 +482,107 @@ function drawRisk(r, h) {
 }
 async function loadRisk() {
   if (!RK.built) buildRisk();
-  try { const [r, h] = await Promise.all([get("/api/risk"), get("/api/health")]); drawRisk(r, h); } catch (e) { /* the banner covers a dead server */ }
+  try { const [r, h] = await Promise.all([get("/api/risk"), get("/api/health")]); drawRisk(r, h); annotate($("page-risk")); } catch (e) { /* the banner covers a dead server */ }
 }
 
+/* ====================================================================== Overview: live chart and summary */
+const LV = {ch: null, series: null, marks: null, lines: [], key: "", tf: null};
+drawChart = function () {   // replaces the hand-drawn canvas chart of legacy.js
+  const host = $("liveChart");
+  if (!host || !host.clientWidth || !window.LightweightCharts || !candles.length) return;
+  if (!LV.ch) {
+    LV.ch = makeChart(host);
+    LV.series = LV.ch.addSeries(LightweightCharts.CandlestickSeries, {upColor: css("--up"), downColor: css("--down"), borderVisible: false, wickUpColor: css("--up"), wickDownColor: css("--down"), priceLineColor: css("--gold")});
+    LV.marks = LightweightCharts.createSeriesMarkers(LV.series, []);
+    LV.ch.subscribeCrosshairMove(p => {
+      const c = p && p.seriesData ? p.seriesData.get(LV.series) : null, last = candles[candles.length - 1];
+      $("ohlc").textContent = c ? "O " + f2(c.open) + "  H " + f2(c.high) + "  L " + f2(c.low) + "  C " + f2(c.close) : "O " + f2(last[1]) + "  H " + f2(last[2]) + "  L " + f2(last[3]) + "  C " + f2(last[4]);
+    });
+  }
+  const span = minutes * 60, bar = c => ({time: c[0] + TZ_S, open: c[1], high: c[2], low: c[3], close: c[4]});
+  const key = minutes + ":" + candles[0][0] + ":" + candles.length;
+  if (key !== LV.key) { LV.series.setData(candles.map(bar)); if (LV.tf !== minutes) { LV.ch.timeScale().fitContent(); LV.tf = minutes; } LV.key = key; }
+  const last = bar(candles[candles.length - 1]), bid = snap && snap.gateway ? snap.gateway.bid : null;
+  if (bid != null && Date.now() / 1000 - candles[candles.length - 1][0] < span * 2) { last.close = bid; last.high = Math.max(last.high, bid); last.low = Math.min(last.low, bid); }
+  LV.series.update(last);
+  for (const l of LV.lines) LV.series.removePriceLine(l);
+  LV.lines = [];
+  for (const p of (snap ? snap.positions : [])) {
+    for (const [price, title, col] of [[p.price_open, "entry", css("--info")], [p.sl, "stop", css("--down")], [p.tp, "target", css("--up")]]) {
+      if (price) LV.lines.push(LV.series.createPriceLine({price, color: col, lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title}));
+    }
+  }
+  const t0 = candles[0][0] * 1000, t1 = candles[candles.length - 1][0] * 1000 + span * 1000, marks = [];
+  const snapT = ms => { const s = Math.floor(ms / 1000); return s - s % span + TZ_S; };
+  for (const t of (snap ? snap.trades.recent : [])) {
+    const long = t.side === "long";
+    if (t.entry_ms >= t0 && t.entry_ms <= t1) marks.push({time: snapT(t.entry_ms), position: long ? "belowBar" : "aboveBar", shape: long ? "arrowUp" : "arrowDown", color: css("--info"), text: long ? "buy" : "sell"});
+    if (t.exit_ms >= t0 && t.exit_ms <= t1) marks.push({time: snapT(t.exit_ms), position: long ? "aboveBar" : "belowBar", shape: long ? "arrowDown" : "arrowUp", color: t.net_pnl > 0 ? css("--up") : css("--down"), text: signed(t.net_pnl)});
+  }
+  marks.sort((a, b) => a.time - b.time); LV.marks.setMarkers(marks);
+};
+const DECISION = {sent: "It opened a trade", wait: "It is waiting: the rule gave no signal, or the AI said wait", gated: "A signal was stopped by a code check", blocked: "Entries are blocked right now", flat: "The AI was unavailable, so nothing was proposed", gateway_unavailable: "The gateway could not be reached", error: "The decision cycle failed", running: "A decision is being made"};
+function drawOverview() {
+  const root = $("overviewNew"); if (!root || !snap) return;
+  let k = $("ovCards"); if (!k) { k = el("div", "tm-cards"); k.id = "ovCards"; root.appendChild(k); }
+  clear(k);
+  const g = snap.gateway, p = snap.positions[0], c = snap.cycles[0], ev = snap.calendar.find(e => e.impact === "high") || snap.calendar[0];
+  tmCard(k, "Equity", g && g.equity != null ? f2(g.equity) + " USD" : "–", "", g ? "balance " + f2(g.balance) : "gateway not reachable");
+  tmCard(k, "Day P&L", g ? signed(g.day_pnl) + " USD" : "–", g ? tone(g.day_pnl) : "", "since 00:00 UTC, open trades included");
+  tmCard(k, "Closed today", snap.trades.today.n + (snap.trades.today.n === 1 ? " trade" : " trades"), tone(snap.trades.today.net_pnl), signed(snap.trades.today.net_pnl) + " USD after costs");
+  if (p) { const long = p.side === "long" || p.side === "buy", px = g ? (long ? g.bid : g.ask) : null;
+    tmCard(k, "Open trade", (long ? "Long " : "Short ") + p.volume + " @ " + f2(p.price_open), tone(p.profit), (p.profit != null ? signed(p.profit) + " USD now" : "") + (px != null && p.sl ? ", stop " + f2(Math.abs(px - p.sl)) + " away" : ""));
+  } else tmCard(k, "Open trade", "None", "", g && g.entries_allowed ? "waiting for a signal" : "new entries are blocked right now");
+  tmCard(k, "Latest decision", c ? hm(c.started_ms) : "–", "", c ? (DECISION[c.status] || c.status) + (c.gate_reason && c.status === "gated" ? " (" + (REFUSED[c.gate_reason] || c.gate_reason) + ")" : "") : "no decision yet");
+  tmCard(k, "Next event", ev ? dateHm(ev.time_ms) : "none stored", "", ev ? ev.title + (ev.impact === "high" ? " (high impact: entries pause around it)" : "") : "");
+  annotate(k);
+}
+const _legacyRender = render;
+render = function () { _legacyRender(); if (GT.page === "overview") drawOverview(); };
+
+/* ====================================================================== Help page and tooltips */
+const HP = {data: null, q: ""};
+function annotate(root) {
+  if (!HP.data) return;
+  const keys = {}; for (const t of Object.keys(HP.data.terms)) keys[t.toLowerCase()] = t;
+  for (const n of (root || document).querySelectorAll("h2, th, .tmc .k, .meter-k, .bar-k")) {
+    if (n.dataset.term || n.childElementCount) continue;
+    const hit = keys[n.textContent.replace(/[▲▼]/g, "").trim().toLowerCase()];
+    if (hit) { n.dataset.term = hit; n.tabIndex = 0; }
+  }
+}
+function drawHelp() {
+  const root = $("helpNew"), d = HP.data; if (!d) return; clear(root);
+  const s1 = el("section"), w = card("How a trade happens, from price to result"), ol = el("ol", "steps");
+  for (const [title, text] of d.walkthrough) { const li = el("li"); li.appendChild(el("b", null, title)); li.appendChild(el("span", null, text)); ol.appendChild(li); }
+  w.appendChild(ol); s1.appendChild(w); root.appendChild(s1);
+  const s2 = el("section"), gcard = card("What the words mean");
+  const inp = el("input", "sel wide"); inp.type = "search"; inp.placeholder = "Search a word, for example spread"; inp.setAttribute("aria-label", "Search the glossary"); inp.value = HP.q;
+  const list = el("div", "gloss");
+  const fill = () => { clear(list); const q = HP.q.trim().toLowerCase();
+    const hits = Object.entries(d.terms).filter(([k, v]) => !q || k.toLowerCase().includes(q) || v.toLowerCase().includes(q)).sort((a, b) => a[0].localeCompare(b[0]));
+    if (!hits.length) list.appendChild(el("div", "empty", "No word matches. Try the Assistant page for anything not listed here."));
+    for (const [k, v] of hits) { const it = el("div", "gl"); it.appendChild(el("b", null, k)); it.appendChild(el("span", null, v)); list.appendChild(it); } };
+  inp.addEventListener("input", () => { HP.q = inp.value; fill(); });
+  gcard.appendChild(inp); gcard.appendChild(list); fill(); s2.appendChild(gcard); root.appendChild(s2);
+  root.appendChild(el("div", "tm-note", "On every page, a word with a dotted underline shows its meaning when you point at it. Charts: TradingView Lightweight Charts, Apache License 2.0."));
+}
+get("/api/glossary").then(g => { HP.data = g; GT.glossary = g.terms; annotate(document); if (GT.page === "help") drawHelp(); }).catch(() => {});
+
+/* ---------- panels that moved to their own page ---------- */
+(function movePanels() {
+  const chat = document.querySelector(".card.chat"), a = $("assistantNew");
+  if (chat && a) { const grid = chat.parentElement; a.appendChild(chat); if (grid) grid.classList.remove("g-live"); }
+  const cot = $("cotHead"), research = $("page-research");
+  if (cot && research) { const c = cot.closest(".card"), grid = c.parentElement, sec = el("section"); sec.appendChild(c); research.appendChild(sec); grid.classList.remove("g-live"); }
+})();
+
 /* ---------- wiring ---------- */
+GT.hooks.overview = () => { drawOverview(); };
+GT.hooks.assistant = () => { const m = $("msgs"); if (m) m.scrollTop = m.scrollHeight; };
+GT.hooks.help = () => drawHelp();
+GT.hooks.agents = () => annotate($("page-agents"));
+GT.hooks.research = () => annotate($("page-research"));
 GT.hooks.risk = () => loadRisk();
 setInterval(() => { if (GT.page === "risk" && !document.hidden) loadRisk(); }, 10000);
 GT.hooks.strategies = () => loadStrategies();

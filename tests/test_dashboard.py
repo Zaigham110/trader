@@ -581,3 +581,16 @@ def test_risk_and_health_pages(tmp_path):
         assert "processes" in json.loads(_get(srv.port, "/api/health")[2])
     finally:
         srv.stop()
+
+
+def test_glossary_route_and_plain_data(tmp_path):
+    from goldtrader import glossary
+
+    assert all(v.strip() and "http" not in v for v in glossary.TERMS.values())
+    srv = DashboardServer(_db(tmp_path), Gateway(), port=0, clock_ms=lambda: NOW)
+    srv.start()
+    try:
+        g = json.loads(_get(srv.port, "/api/glossary")[2])
+        assert "R" in g["terms"] and "Trailing stop" in g["terms"] and len(g["walkthrough"]) == 7
+    finally:
+        srv.stop()
